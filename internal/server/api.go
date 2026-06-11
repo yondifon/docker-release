@@ -1,9 +1,11 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/malico/docker-release/internal/state"
@@ -48,10 +50,25 @@ func (s *Server) apiMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/services", s.handleServices)
 	mux.HandleFunc("GET /api/services/{service}", s.handleService)
-	mux.HandleFunc("POST /api/services/{service}/cancel", s.handleCancelByService)
+	mux.HandleFunc("POST /api/services/{service}/cancel", s.requireToken(s.handleCancelByService))
 	mux.HandleFunc("GET /api/deployments/{id}", s.handleDeployment)
-	mux.HandleFunc("POST /api/deployments/{id}/cancel", s.handleCancelByDeployment)
+	mux.HandleFunc("POST /api/deployments/{id}/cancel", s.requireToken(s.handleCancelByDeployment))
 	return mux
+}
+
+// requireToken guards mutating endpoints with a bearer token when
+// Config.APIToken is set. Comparison is constant-time.
+func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.APIToken != "" {
+			got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if !ok || subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.APIToken)) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next(w, r)
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +76,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
-	states, err := s.mgr.ListAll()
+	states, err := s.listAll()
 	if err != nil {
 		http.Error(w, "failed to load state", http.StatusInternalServerError)
 		return
@@ -73,11 +90,17 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("service")
 	ds, err := s.mgr.Load(name)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		// Load fails for invalid names (e.g. path traversal) before any I/O;
+		// treat as not found rather than leaking internals.
+		http.Error(w, "service not found", http.StatusNotFound)
 		return
 	}
 	active := s.ctrl.ActiveDeployments()
 	_, inProgress := active[name]
+	if ds.UpdatedAt.IsZero() && !inProgress {
+		http.Error(w, "service not found", http.StatusNotFound)
+		return
+	}
 	info := toServiceInfo(ds, inProgress, s.pendingCommandsByService()[name])
 	writeJSON(w, http.StatusOK, info)
 }
@@ -126,7 +149,7 @@ func (s *Server) handleCancelByService(w http.ResponseWriter, r *http.Request) {
 // findDeployment scans all state files for the given deployment ID, matching
 // both active and previous deployment IDs. Returns nil, nil when not found.
 func (s *Server) findDeployment(id string) (*DeploymentStatus, error) {
-	states, err := s.mgr.ListAll()
+	states, err := s.listAll()
 	if err != nil {
 		log.Printf("[server] findDeployment: %v", err)
 		return nil, err
@@ -208,5 +231,7 @@ func toServiceInfo(ds *state.DeploymentState, inProgress bool, pending []Pending
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("[server] encode response: %v", err)
+	}
 }

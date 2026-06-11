@@ -44,7 +44,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	states, err := s.mgr.ListAll()
+	states, err := s.listAll()
 	if err != nil {
 		log.Printf("[server] web list: %v", err)
 		states = nil
@@ -60,7 +60,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePartialServices(w http.ResponseWriter, r *http.Request) {
-	states, err := s.mgr.ListAll()
+	states, err := s.listAll()
 	if err != nil {
 		log.Printf("[server] partial list: %v", err)
 		states = nil

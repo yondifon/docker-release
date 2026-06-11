@@ -92,7 +92,7 @@ The `default:` branch in `main.go` treats any unrecognised first argument as a s
 Install (no repo clone needed):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/malico/docker-release/main/scripts/docker-release \
+curl -fsSL https://raw.githubusercontent.com/yondifon/docker-release/main/scripts/docker-release \
   | sudo tee ~/.docker/cli-plugins/docker-release >/dev/null \
   && sudo chmod +x ~/.docker/cli-plugins/docker-release
 ```
@@ -126,13 +126,18 @@ docker release status
 | `Strategy` | `release.strategy` | `linear` |
 | `HealthCheckTimeout` | `release.health_check_timeout` | `60s` |
 | `DrainTimeout` | `release.drain_timeout` | `10s` |
-| `NginxContainer` | `release.nginx.container` | — |
-| `NginxConfigDir` | `release.nginx.config_dir` | — |
-| `AngieContainer` | `release.angie.container` | — |
-| `AngieConfigDir` | `release.angie.config_dir` | — |
-| `TraefikConfigDir` | `release.traefik.config_dir` | — |
+| `NginxService` | `release.nginx.service` | auto-detected by image |
+| `NginxConfigDir` | `release.nginx.config_dir` | `/shared/nginx-config` (nginx) or `/shared/nginx-tmpl` (nginx-proxy) |
+| `AngieService` | `release.angie.service` | auto-detected by image |
+| `AngieConfigDir` | `release.angie.config_dir` | `/shared/angie-config` |
+| `TraefikConfigDir` | `release.traefik.config_dir` | `/shared/traefik-config` |
+| `CaddyService` | `release.caddy.service` | auto-detected by image |
+| `CaddyConfigDir` | `release.caddy.config_dir` | `/shared/caddy-config` |
+| `CaddyPath` | `release.caddy.path` | `` (named-snippet mode) |
+| `HAProxyService` | `release.haproxy.service` | auto-detected by image |
+| `HAProxyConfigDir` | `release.haproxy.config_dir` | `/shared/haproxy-config` |
 | `UpstreamName` | `release.upstream` | service name |
-| `Affinity` | `release.affinity` | `cookie` |
+| `Affinity` | `release.affinity` | `ip` |
 | `BlueGreen.SoakTime` | `release.bg.soak_time` | `5m` |
 | `BlueGreen.GreenWeight` | `release.bg.green_weight` | `50` |
 | `Canary.StartPercentage` | `release.canary.start_percentage` | `10` |
@@ -146,7 +151,9 @@ Interface — each provider implements:
 - `Drain(containerAddr string) error` — remove one server from upstream
 - `SetTrafficSplit(old, new []Server) error` — canary weight update
 
-Providers: `nginx`, `angie`, `traefik`, `nginxproxy`, `noop`
+Providers: `nginx`, `angie`, `caddy`, `traefik`, `haproxy`, `nginxproxy`, `noop`
+
+**Caddy default:** no `release.caddy.path` generates a named snippet like `(api_upstream)`. Users import generated files globally, then use `import api_upstream` inside their own site/route blocks so headers, auth, rate limits, and other directives stay in their Caddyfile. Set `release.caddy.path` only when docker-release should generate a full `handle_path` block.
 
 ### `internal/strategy`
 
@@ -169,6 +176,21 @@ Public methods on `*Controller`:
 
 Persists `DeploymentState` to `/var/lib/docker-release/<project>/<service>.json`. Tracks status (`idle`, `in_progress`), active/previous container sets, strategy, timestamps.
 
+### `internal/server`
+
+Optional HTTP API (port 9080) + web dashboard (port 9081), both off by default. Env vars:
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `DR_EXPOSE_API` | off | `1`/`true`/`yes` enables the REST API |
+| `DR_EXPOSE_WEB` | off | enables the web dashboard |
+| `DR_BIND_ADDR` | `0.0.0.0` | listen address |
+| `DR_API_PORT` | `9080` | API port (1–65535; invalid values fall back with a logged warning) |
+| `DR_WEB_PORT` | `9081` | web port |
+| `DR_API_TOKEN` | — | when set, mutating endpoints (`POST .../cancel`) require `Authorization: Bearer <token>` (constant-time compare). Unset logs a startup warning and leaves them open — only safe on trusted networks |
+
+Routes: `GET /api/health`, `GET /api/services`, `GET /api/services/{service}`, `POST /api/services/{service}/cancel`, `GET /api/deployments/{id}`, `POST /api/deployments/{id}/cancel`. Unknown or invalid service names return 404.
+
 ---
 
 ## Provider mechanics
@@ -177,12 +199,12 @@ All providers follow the same pattern:
 1. Controller writes upstream config to a shared Docker volume
 2. Proxy reads that volume (mounted read-only) and hot-reloads
 
-**Session affinity mapping** — all strategies enable sticky sessions by default (`release.affinity: cookie`). Each provider implements it differently:
+**Session affinity mapping** — all strategies enable sticky sessions by default (`release.affinity: ip`). Each provider implements it differently:
 
 | Affinity | Nginx (OSS) | Angie | Traefik | nginx-proxy |
 |----------|------------|-------|---------|-------------|
-| `cookie` | `ip_hash` (no sticky cookie in OSS) | `sticky cookie _srv path=/;` | `sticky.cookie: {}` | `ip_hash` |
-| `ip` | `ip_hash` | `ip_hash` | `sticky.cookie: {}` (no ip-hash in Traefik) | `ip_hash` |
+| `cookie` | `ip_hash` (no sticky cookie in OSS) | `sticky cookie _srr_<hash> path=/;` | `sticky.cookie.name: _srr_<hash>` | `ip_hash` |
+| `ip` | `ip_hash` | `ip_hash` | `strategy: hrw` | `ip_hash` |
 | `""` (off) | `least_conn` | `least_conn` | RoundRobin (no sticky) | `least_conn` |
 
 **Nginx / Angie:** generates `<service>_upstream.conf` in the shared dir, sends `nginx -s reload` / `angie -s reload` to the proxy container via `docker exec`.
@@ -197,7 +219,7 @@ All providers follow the same pattern:
 
 ## Deployment strategies
 
-All strategies enable session affinity by default (`release.affinity: cookie`). This ensures users stay on the same backend during a deployment. Set `release.affinity: ""` to disable, or `release.affinity: ip` for IP-based hashing.
+All strategies enable session affinity by default (`release.affinity: ip`). This ensures users stay on the same backend during a deployment. Set `release.affinity: ""` to disable, or `release.affinity: cookie` for cookie-based sticky sessions.
 
 ### Linear
 Replaces containers one at a time: start new → wait healthy → add to upstream → mark old as draining → wait drain timeout → remove old. Repeats per replica.

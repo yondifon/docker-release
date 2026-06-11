@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -232,7 +233,7 @@ func TestWebIndexRoute(t *testing.T) {
 func TestWebPartialRoute(t *testing.T) {
 	dir := t.TempDir()
 	srv := newTestServer(dir, "testproj")
-	_ = srv.mgr.Save(&state.DeploymentState{
+	_ = srv.mgr.(*state.Manager).Save(&state.DeploymentState{
 		Service: "web",
 		Status:  state.StatusIdle,
 	})
@@ -253,7 +254,7 @@ func TestWebPartialRoute(t *testing.T) {
 func TestHandleDeploymentByID(t *testing.T) {
 	dir := t.TempDir()
 	srv := newTestServer(dir, "proj")
-	_ = srv.mgr.Save(&state.DeploymentState{
+	_ = srv.mgr.(*state.Manager).Save(&state.DeploymentState{
 		Service:              "web",
 		Status:               state.StatusInProgress,
 		Strategy:             "canary",
@@ -375,6 +376,63 @@ func TestWebNotFound(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestRequireTokenRejectsMissingOrWrong(t *testing.T) {
+	srv := newTestServer(t.TempDir(), "proj")
+	srv.cfg.APIToken = "secret"
+	mux := srv.apiMux()
+
+	for _, auth := range []string{"", "Bearer wrong", "secret"} {
+		req := httptest.NewRequest("POST", "/api/services/web/cancel", nil)
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("auth=%q: status = %d, want 401", auth, rec.Code)
+		}
+	}
+}
+
+func TestRequireTokenAcceptsValid(t *testing.T) {
+	srv := newTestServer(t.TempDir(), "proj")
+	srv.cfg.APIToken = "secret"
+	mux := srv.apiMux()
+
+	req := httptest.NewRequest("POST", "/api/services/web/cancel", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	// Valid token passes auth; 404 because no deployment is active.
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandleServiceUnknownReturns404(t *testing.T) {
+	srv := newTestServer(t.TempDir(), "proj")
+	mux := srv.apiMux()
+
+	req := httptest.NewRequest("GET", "/api/services/ghost", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandleServiceInvalidNameReturns404(t *testing.T) {
+	srv := newTestServer(t.TempDir(), "proj")
+	mux := srv.apiMux()
+
+	req := httptest.NewRequest("GET", "/api/services/"+url.PathEscape("../etc"), nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}

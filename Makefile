@@ -36,12 +36,16 @@ tag:
 publish:
 	@test "$(VERSION)" != "dev" || (echo "ERROR: set VERSION=x.y.z"; exit 1)
 	$(MAKE) buildx-builder
+	@echo "$(VERSION)" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?$$' && { \
+		MAJOR=$$(echo "$(VERSION)" | cut -d. -f1); \
+	} || { MAJOR=; }
 	@docker buildx build \
 		--builder docker-release-builder \
 		--platform linux/amd64,linux/arm64 \
 		--build-arg VERSION=$(VERSION) \
 		-t $(IMAGE):$(VERSION) \
 		-t $(IMAGE):latest \
+		$(if $(MAJOR),-t $(IMAGE):$(MAJOR)) \
 		--push \
 		. && $(MAKE) tag
 

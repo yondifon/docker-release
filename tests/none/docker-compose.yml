@@ -3,6 +3,7 @@ services:
     build:
       context: ../../
       dockerfile: Dockerfile
+    image: docker-release:local
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     command: ["watch"]

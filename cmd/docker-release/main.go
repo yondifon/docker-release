@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/malico/docker-release/internal/config"
@@ -78,6 +79,11 @@ func main() {
 		// Positional shorthand: dr <service> [--force]
 		// Anything not matching a reserved command is treated as a service name.
 		// If your service is named after a reserved word, use: dr release <service>
+		if strings.HasPrefix(os.Args[1], "-") {
+			fmt.Fprintf(os.Stderr, "error: unknown flag %q\n\n", os.Args[1])
+			printUsage()
+			os.Exit(1)
+		}
 		opts, err := parseReleaseOptions(os.Args[2:])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
