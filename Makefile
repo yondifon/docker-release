@@ -1,7 +1,11 @@
 VERSION ?= $(shell v=$$(git tag --points-at HEAD 2>/dev/null | head -1); echo $${v:-dev})
 IMAGE   ?= malico/docker-release
 
+# Bump type passed as a goal: make publish major|minor|fix
+BUMP := $(filter major minor fix,$(MAKECMDGOALS))
+
 .PHONY: dev dev-remove test build publish tag buildx-builder \
+	major minor fix print-version \
 	up-nginx up-angie up-traefik up-nginx-proxy up-caddy up-haproxy \
 	down-nginx down-angie down-traefik down-nginx-proxy down-caddy down-haproxy
 
@@ -33,21 +37,52 @@ tag:
 	git tag -a latest -m "Latest release v$(VERSION)"; \
 	git push origin latest --force 2>/dev/null || true
 
+# Swallow bump goals so `make publish minor` doesn't error on `minor`.
+major minor fix:
+	@:
+
+# next-version: bump latest v<semver> git tag by $(BUMP). 0.0.0 if no tags.
+define next_version
+	git fetch --tags origin 2>/dev/null; \
+	latest=$$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1); \
+	cur=$${latest#v}; cur=$${cur:-0.0.0}; \
+	major=$$(echo "$$cur" | cut -d. -f1); \
+	minor=$$(echo "$$cur" | cut -d. -f2); \
+	patch=$$(echo "$$cur" | cut -d. -f3); \
+	case "$(BUMP)" in \
+		major) next=$$((major+1)).0.0 ;; \
+		minor) next=$$major.$$((minor+1)).0 ;; \
+		fix)   next=$$major.$$minor.$$((patch+1)) ;; \
+	esac
+endef
+
+print-version:
+	@if [ -n "$(BUMP)" ]; then \
+		$(next_version); \
+		echo "current: $$cur  next ($(BUMP)): $$next"; \
+	else \
+		echo "$(VERSION)"; \
+	fi
+
 publish:
-	@test "$(VERSION)" != "dev" || (echo "ERROR: set VERSION=x.y.z"; exit 1)
+ifneq ($(BUMP),)
+	@$(next_version); \
+	echo "Publishing v$$next (current: v$$cur, bump: $(BUMP))"; \
+	$(MAKE) publish VERSION=$$next
+else
+	@test "$(VERSION)" != "dev" || (echo "ERROR: set VERSION=x.y.z or use: make publish major|minor|fix"; exit 1)
 	$(MAKE) buildx-builder
-	@echo "$(VERSION)" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?$$' && { \
-		MAJOR=$$(echo "$(VERSION)" | cut -d. -f1); \
-	} || { MAJOR=; }
-	@docker buildx build \
+	@major=$$(echo "$(VERSION)" | grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$$' | cut -d. -f1); \
+	docker buildx build \
 		--builder docker-release-builder \
 		--platform linux/amd64,linux/arm64 \
 		--build-arg VERSION=$(VERSION) \
 		-t $(IMAGE):$(VERSION) \
 		-t $(IMAGE):latest \
-		$(if $(MAJOR),-t $(IMAGE):$(MAJOR)) \
+		$${major:+-t $(IMAGE):$$major} \
 		--push \
 		. && $(MAKE) tag
+endif
 
 buildx-builder:
 	@docker buildx inspect docker-release-builder >/dev/null 2>&1 || \
