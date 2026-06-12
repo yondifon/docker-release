@@ -777,14 +777,23 @@ func filterServiceContainers(containers []types.Container, serviceName string) [
 }
 
 func (c *Controller) serviceFromEvent(ctx context.Context, containerID string, attrs map[string]string) string {
+	var cached *types.ContainerJSON
+	getInfo := func() *types.ContainerJSON {
+		if cached != nil {
+			return cached
+		}
+		info, err := c.docker.Inspect(ctx, containerID)
+		if err != nil {
+			return nil
+		}
+		cached = &info
+		return cached
+	}
+
 	if c.project != "" {
 		eventProject := attrs["com.docker.compose.project"]
 		if eventProject == "" {
-			info, err := c.docker.Inspect(ctx, containerID)
-			if err != nil {
-				return ""
-			}
-			if info.Config != nil && info.Config.Labels != nil {
+			if info := getInfo(); info != nil && info.Config != nil && info.Config.Labels != nil {
 				eventProject = info.Config.Labels["com.docker.compose.project"]
 			}
 		}
@@ -793,24 +802,14 @@ func (c *Controller) serviceFromEvent(ctx context.Context, containerID string, a
 		}
 	}
 
-	serviceName := attrs["com.docker.compose.service"]
-	if serviceName != "" {
+	if serviceName := attrs["com.docker.compose.service"]; serviceName != "" {
 		return serviceName
 	}
 
-	info, err := c.docker.Inspect(ctx, containerID)
-	if err != nil {
+	info := getInfo()
+	if info == nil || info.Config == nil || info.Config.Labels == nil {
 		return ""
 	}
-
-	if info.Config == nil {
-		return ""
-	}
-
-	if info.Config.Labels == nil {
-		return ""
-	}
-
 	return info.Config.Labels["com.docker.compose.service"]
 }
 
