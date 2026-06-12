@@ -87,46 +87,9 @@ func (c *Canary) Execute(ctx context.Context, d *Deployment) error {
 
 	slog.Info("promoting canary to 100%", "component", "canary", "service", d.Service)
 
-	finalUpstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName(), Affinity: d.Config.Affinity}
-	for _, cn := range d.New {
-		finalUpstream.Servers = append(finalUpstream.Servers, provider.Server{Addr: cn.Addr})
+	if err := promoteAndDrain(ctx, "canary", c.docker, c.provider, d, d.Config.Affinity); err != nil {
+		return err
 	}
-	for _, old := range d.Old {
-		finalUpstream.Servers = append(finalUpstream.Servers, provider.Server{Addr: old.Addr, Backup: true})
-	}
-	ApplyProviderSettings(d.Config, finalUpstream)
-
-	if err := c.provider.GenerateConfig(ctx, finalUpstream); err != nil {
-		return fmt.Errorf("generating final deployment config: %w", err)
-	}
-
-	if err := c.provider.Reload(ctx); err != nil {
-		return fmt.Errorf("reloading final deployment: %w", err)
-	}
-
-	slog.Info("draining old containers", "component", "canary", "service", d.Service, "timeout", d.Config.DrainTimeout)
-
-	select {
-	case <-time.After(d.Config.DrainTimeout):
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	stableUpstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName()}
-	for _, cn := range d.New {
-		stableUpstream.Servers = append(stableUpstream.Servers, provider.Server{Addr: cn.Addr})
-	}
-	ApplyProviderSettings(d.Config, stableUpstream)
-
-	if err := c.provider.GenerateConfig(ctx, stableUpstream); err != nil {
-		return fmt.Errorf("generating final stable config: %w", err)
-	}
-
-	if err := c.provider.Reload(ctx); err != nil {
-		return fmt.Errorf("reloading final stable: %w", err)
-	}
-
-	removeContainers(ctx, "canary", c.docker, d.Old)
 
 	ds.Status = state.StatusIdle
 	ds.CurrentWeight = 100

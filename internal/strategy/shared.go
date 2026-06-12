@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/malico/docker-release/internal/provider"
 	"github.com/malico/docker-release/internal/state"
@@ -67,5 +68,54 @@ func baseRollback(ctx context.Context, tag string, docker DockerOps, prov provid
 	}
 
 	slog.Info("rollback complete", "component", tag, "service", d.Service)
+	return nil
+}
+
+// promoteAndDrain routes traffic to the new containers (with old as backup),
+// waits for the drain timeout, then removes old containers. drainAffinity sets
+// the affinity on the transition config; pass "" to disable affinity during drain.
+func promoteAndDrain(ctx context.Context, tag string, docker DockerOps, prov provider.Provider, d *Deployment, drainAffinity string) error {
+	finalUpstream := &provider.UpstreamState{
+		Service:      d.Service,
+		UpstreamName: d.UpstreamName(),
+		Affinity:     drainAffinity,
+	}
+	for _, c := range d.New {
+		finalUpstream.Servers = append(finalUpstream.Servers, provider.Server{Addr: c.Addr})
+	}
+	for _, c := range d.Old {
+		finalUpstream.Servers = append(finalUpstream.Servers, provider.Server{Addr: c.Addr, Backup: true})
+	}
+	ApplyProviderSettings(d.Config, finalUpstream)
+
+	if err := prov.GenerateConfig(ctx, finalUpstream); err != nil {
+		return fmt.Errorf("generating drain config: %w", err)
+	}
+	if err := prov.Reload(ctx); err != nil {
+		return fmt.Errorf("reloading drain config: %w", err)
+	}
+
+	slog.Info("draining old containers", "component", tag, "service", d.Service, "timeout", d.Config.DrainTimeout)
+
+	select {
+	case <-time.After(d.Config.DrainTimeout):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	stableUpstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName()}
+	for _, c := range d.New {
+		stableUpstream.Servers = append(stableUpstream.Servers, provider.Server{Addr: c.Addr})
+	}
+	ApplyProviderSettings(d.Config, stableUpstream)
+
+	if err := prov.GenerateConfig(ctx, stableUpstream); err != nil {
+		return fmt.Errorf("generating stable config: %w", err)
+	}
+	if err := prov.Reload(ctx); err != nil {
+		return fmt.Errorf("reloading stable config: %w", err)
+	}
+
+	removeContainers(ctx, tag, docker, d.Old)
 	return nil
 }

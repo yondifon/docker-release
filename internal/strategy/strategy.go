@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"context"
+	"time"
 
 	"github.com/malico/docker-release/internal/config"
 	"github.com/malico/docker-release/internal/provider"
@@ -61,6 +62,12 @@ func ApplyProviderSettings(cfg *config.ServiceConfig, upstream *provider.Upstrea
 	case config.ProviderCaddy:
 		upstream.Keepalive = cfg.ResolveCaddyKeepalive(len(upstream.Servers))
 	}
+}
+
+type DockerOps interface {
+	WaitHealthy(ctx context.Context, containerID string, timeout time.Duration) error
+	Stop(ctx context.Context, containerID string, timeoutSeconds int) error
+	Remove(ctx context.Context, containerID string) error
 }
 
 type Strategy interface {

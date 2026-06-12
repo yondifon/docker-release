@@ -72,48 +72,9 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 		return ctx.Err()
 	}
 
-	finalUpstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName()}
-	for _, c := range d.New {
-		finalUpstream.Servers = append(finalUpstream.Servers, provider.Server{Addr: c.Addr})
+	if err := promoteAndDrain(ctx, "blue-green", bg.docker, bg.provider, d, ""); err != nil {
+		return err
 	}
-	for _, c := range d.Old {
-		finalUpstream.Servers = append(finalUpstream.Servers, provider.Server{Addr: c.Addr, Backup: true})
-	}
-	ApplyProviderSettings(d.Config, finalUpstream)
-
-	if err := bg.provider.GenerateConfig(ctx, finalUpstream); err != nil {
-		return fmt.Errorf("generating green config: %w", err)
-	}
-
-	if err := bg.provider.Reload(ctx); err != nil {
-		return fmt.Errorf("reloading provider: %w", err)
-	}
-
-	slog.Info("draining blue containers", "component", "blue-green", "service", d.Service, "timeout", d.Config.DrainTimeout)
-
-	select {
-	case <-time.After(d.Config.DrainTimeout):
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	postDrainUpstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName()}
-	for _, c := range d.New {
-		postDrainUpstream.Servers = append(postDrainUpstream.Servers, provider.Server{Addr: c.Addr})
-	}
-	ApplyProviderSettings(d.Config, postDrainUpstream)
-
-	if err := bg.provider.GenerateConfig(ctx, postDrainUpstream); err != nil {
-		return fmt.Errorf("generating post-drain config: %w", err)
-	}
-
-	if err := bg.provider.Reload(ctx); err != nil {
-		return fmt.Errorf("reloading post-drain: %w", err)
-	}
-
-	slog.Info("tearing down blue containers", "component", "blue-green", "service", d.Service)
-
-	removeContainers(ctx, "blue-green", bg.docker, d.Old)
 
 	ds.Status = state.StatusIdle
 	ds.CurrentWeight = 100

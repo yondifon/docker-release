@@ -895,12 +895,7 @@ func (c *Controller) resolveServiceConfig(ctx context.Context, service string) *
 	return &config.ServiceConfig{Provider: config.ProviderNone}
 }
 
-func (c *Controller) discoverServices(ctx context.Context) (map[string][]types.Container, error) {
-	containers, err := c.docker.ListManagedContainers(ctx, c.project)
-	if err != nil {
-		return nil, err
-	}
-
+func groupContainersByService(containers []types.Container) map[string][]types.Container {
 	services := make(map[string][]types.Container)
 	for _, ctr := range containers {
 		name := ctr.Labels["com.docker.compose.service"]
@@ -909,8 +904,15 @@ func (c *Controller) discoverServices(ctx context.Context) (map[string][]types.C
 		}
 		services[name] = append(services[name], ctr)
 	}
+	return services
+}
 
-	return services, nil
+func (c *Controller) discoverServices(ctx context.Context) (map[string][]types.Container, error) {
+	containers, err := c.docker.ListManagedContainers(ctx, c.project)
+	if err != nil {
+		return nil, err
+	}
+	return groupContainersByService(containers), nil
 }
 
 func (c *Controller) handleHealthStatus(ctx context.Context, containerID string, attrs map[string]string) {

@@ -237,6 +237,25 @@ func (c *ServiceConfig) ResolveAngieKeepalive(serverCount int) int {
 	return resolveKeepalive(c.AngieKeepalive, serverCount)
 }
 
+// ConfigDir returns the provider-specific config directory. Returns "" for
+// providers that don't write per-service config files.
+func (c *ServiceConfig) ConfigDir() string {
+	switch c.Provider {
+	case ProviderNginx:
+		return c.NginxConfigDir
+	case ProviderAngie:
+		return c.AngieConfigDir
+	case ProviderTraefik:
+		return c.TraefikConfigDir
+	case ProviderCaddy:
+		return c.CaddyConfigDir
+	case ProviderHAProxy:
+		return c.HAProxyConfigDir
+	default:
+		return ""
+	}
+}
+
 func getOr(labels map[string]string, key, fallback string) string {
 	if v, ok := labels[key]; ok && v != "" {
 		return v

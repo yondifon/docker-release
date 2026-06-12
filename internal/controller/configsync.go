@@ -17,19 +17,25 @@ import (
 )
 
 func (c *Controller) generateInitialConfigs(ctx context.Context, services map[string][]types.Container) {
+	c.syncServicesConfigs(ctx, services, false, false)
+}
+
+// syncServicesConfigs parses labels, cleans stale config files, then generates
+// and reloads provider config for each active service. checkHealth marks
+// servers that fail their health check as down. skipDeploying skips services
+// that already have a deployment in progress.
+func (c *Controller) syncServicesConfigs(ctx context.Context, services map[string][]types.Container, checkHealth, skipDeploying bool) {
 	activeConfigs := make(map[string]*config.ServiceConfig)
 
 	for name, containers := range services {
 		if len(containers) == 0 {
 			continue
 		}
-
 		cfg, err := config.ParseLabels(containers[0].Labels)
 		if err != nil {
-			slog.Warn("skipping initial config", "component", "controller", "service", name, "err", err)
+			slog.Warn("skipping service config", "component", "controller", "service", name, "err", err)
 			continue
 		}
-
 		c.resolveNginxProxyUpstream(ctx, cfg, containers)
 		activeConfigs[name] = cfg
 	}
@@ -37,7 +43,10 @@ func (c *Controller) generateInitialConfigs(ctx context.Context, services map[st
 	c.cleanStaleConfigs(activeConfigs)
 
 	for name, cfg := range activeConfigs {
-		c.generateServiceConfig(ctx, name, cfg, services[name], false)
+		if skipDeploying && c.shouldSkipRefresh(name) {
+			continue
+		}
+		c.generateServiceConfig(ctx, name, cfg, services[name], checkHealth)
 	}
 }
 
@@ -50,27 +59,15 @@ func (c *Controller) cleanStaleConfigs(activeConfigs map[string]*config.ServiceC
 	active := make(map[configDir]map[string]bool)
 
 	for name, cfg := range activeConfigs {
-		var cd configDir
-
-		switch cfg.Provider {
-		case config.ProviderNginx:
-			cd = configDir{dir: cfg.NginxConfigDir, ext: ".conf"}
-		case config.ProviderAngie:
-			cd = configDir{dir: cfg.AngieConfigDir, ext: ".conf"}
-		case config.ProviderTraefik:
-			cd = configDir{dir: cfg.TraefikConfigDir, ext: ".yml"}
-		case config.ProviderCaddy:
-			cd = configDir{dir: cfg.CaddyConfigDir, ext: ".caddy"}
-		case config.ProviderHAProxy:
-			cd = configDir{dir: cfg.HAProxyConfigDir, ext: ".cfg"}
-		default:
+		ext, perService := provider.ConfigExt(cfg.Provider)
+		if !perService {
 			continue
 		}
-
-		if cd.dir == "" {
+		dir := cfg.ConfigDir()
+		if dir == "" {
 			continue
 		}
-
+		cd := configDir{dir: dir, ext: ext}
 		if active[cd] == nil {
 			active[cd] = make(map[string]bool)
 		}
@@ -292,40 +289,7 @@ func (c *Controller) refreshAllConfigs(ctx context.Context) {
 		slog.Error("error listing containers", "component", "controller", "err", err)
 		return
 	}
-
-	services := make(map[string][]types.Container)
-	for _, ctr := range containers {
-		name := ctr.Labels["com.docker.compose.service"]
-		if name == "" {
-			continue
-		}
-		services[name] = append(services[name], ctr)
-	}
-
-	activeConfigs := make(map[string]*config.ServiceConfig)
-	for name, serviceContainers := range services {
-		if len(serviceContainers) == 0 {
-			continue
-		}
-
-		cfg, err := config.ParseLabels(serviceContainers[0].Labels)
-		if err != nil {
-			slog.Error("error parsing labels", "component", "controller", "service", name, "err", err)
-			continue
-		}
-
-		activeConfigs[name] = cfg
-	}
-
-	c.cleanStaleConfigs(activeConfigs)
-
-	for name, cfg := range activeConfigs {
-		if c.shouldSkipRefresh(name) {
-			continue
-		}
-		c.resolveNginxProxyUpstream(ctx, cfg, services[name])
-		c.generateServiceConfig(ctx, name, cfg, services[name], true)
-	}
+	c.syncServicesConfigs(ctx, groupContainersByService(containers), true, true)
 }
 
 func (c *Controller) shouldSkipRefresh(serviceName string) bool {

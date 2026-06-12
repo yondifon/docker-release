@@ -10,12 +10,6 @@ import (
 	"github.com/malico/docker-release/internal/state"
 )
 
-type DockerOps interface {
-	WaitHealthy(ctx context.Context, containerID string, timeout time.Duration) error
-	Stop(ctx context.Context, containerID string, timeoutSeconds int) error
-	Remove(ctx context.Context, containerID string) error
-}
-
 type Linear struct {
 	docker   DockerOps
 	provider provider.Provider
