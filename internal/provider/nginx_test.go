@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,7 +210,7 @@ func TestGenerateConfigWritesFile(t *testing.T) {
 		},
 	}
 
-	if err := p.GenerateConfig(state); err != nil {
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
 		t.Fatalf("generate error: %v", err)
 	}
 
@@ -233,4 +234,3 @@ func TestGenerateConfigWritesFile(t *testing.T) {
 		t.Error("temp file not cleaned up")
 	}
 }
-

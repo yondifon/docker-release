@@ -3,7 +3,7 @@ package strategy
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/malico/docker-release/internal/provider"
@@ -25,20 +25,14 @@ func NewCanary(docker DockerOps, prov provider.Provider, stateMgr *state.Manager
 }
 
 func (c *Canary) Execute(ctx context.Context, d *Deployment) error {
-	log.Printf("[canary] starting deployment for %s: %d stable, %d canary", d.Service, len(d.Old), len(d.New))
-
-	prev, _ := c.state.Load(d.Service)
-	prevDeployID := ""
-	if prev != nil {
-		prevDeployID = prev.ActiveDeploymentID
-	}
+	slog.Info("starting deployment", "component", "canary", "service", d.Service, "stable", len(d.Old), "canary", len(d.New))
 
 	ds := &state.DeploymentState{
 		Service:              d.Service,
 		Status:               state.StatusInProgress,
 		Strategy:             "canary",
-		ActiveDeploymentID:   state.GenerateDeploymentID(),
-		PreviousDeploymentID: prevDeployID,
+		ActiveDeploymentID:   d.resolveDeployID(),
+		PreviousDeploymentID: d.PrevDeployID,
 		Containers: state.Containers{
 			Stable: containerIDs(d.Old),
 			Canary: containerIDs(d.New),
@@ -49,11 +43,8 @@ func (c *Canary) Execute(ctx context.Context, d *Deployment) error {
 		return fmt.Errorf("saving initial state: %w", err)
 	}
 
-	for _, cn := range d.New {
-		log.Printf("[canary] waiting for %s to be healthy", cn.ID[:12])
-		if err := c.docker.WaitHealthy(ctx, cn.ID, d.Config.HealthCheckTimeout); err != nil {
-			return fmt.Errorf("health check failed for %s: %w", cn.ID[:12], err)
-		}
+	if err := waitAllHealthy(ctx, "canary", c.docker, d); err != nil {
+		return err
 	}
 
 	canaryCfg := d.Config.Canary
@@ -64,14 +55,14 @@ func (c *Canary) Execute(ctx context.Context, d *Deployment) error {
 			return err
 		}
 
-		log.Printf("[canary] setting canary weight to %d%%", weight)
+		slog.Info("setting canary weight", "component", "canary", "service", d.Service, "weight", weight)
 
 		upstream := buildCanaryUpstream(d, weight)
-		if err := c.provider.GenerateConfig(upstream); err != nil {
+		if err := c.provider.GenerateConfig(ctx, upstream); err != nil {
 			return fmt.Errorf("generating config at %d%%: %w", weight, err)
 		}
 
-		if err := c.provider.Reload(); err != nil {
+		if err := c.provider.Reload(ctx); err != nil {
 			return fmt.Errorf("reloading at %d%%: %w", weight, err)
 		}
 
@@ -80,7 +71,7 @@ func (c *Canary) Execute(ctx context.Context, d *Deployment) error {
 			return fmt.Errorf("saving state at %d%%: %w", weight, err)
 		}
 
-		log.Printf("[canary] observing for %s at %d%%", canaryCfg.Interval, weight)
+		slog.Info("observing canary", "component", "canary", "service", d.Service, "interval", canaryCfg.Interval, "weight", weight)
 
 		select {
 		case <-time.After(canaryCfg.Interval):
@@ -94,55 +85,10 @@ func (c *Canary) Execute(ctx context.Context, d *Deployment) error {
 		}
 	}
 
-	log.Printf("[canary] promoting canary to 100%%")
+	slog.Info("promoting canary to 100%", "component", "canary", "service", d.Service)
 
-	finalUpstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName(), Affinity: d.Config.Affinity}
-	for _, cn := range d.New {
-		finalUpstream.Servers = append(finalUpstream.Servers, provider.Server{Addr: cn.Addr})
-	}
-	for _, old := range d.Old {
-		finalUpstream.Servers = append(finalUpstream.Servers, provider.Server{Addr: old.Addr, Backup: true})
-	}
-	applyNginxKeepalive(d, finalUpstream)
-
-	if err := c.provider.GenerateConfig(finalUpstream); err != nil {
-		return fmt.Errorf("generating final deployment config: %w", err)
-	}
-
-	if err := c.provider.Reload(); err != nil {
-		return fmt.Errorf("reloading final deployment: %w", err)
-	}
-
-	log.Printf("[canary] draining old containers for %s", d.Config.DrainTimeout)
-
-	select {
-	case <-time.After(d.Config.DrainTimeout):
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	stableUpstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName()}
-	for _, cn := range d.New {
-		stableUpstream.Servers = append(stableUpstream.Servers, provider.Server{Addr: cn.Addr})
-	}
-	applyNginxKeepalive(d, stableUpstream)
-
-	if err := c.provider.GenerateConfig(stableUpstream); err != nil {
-		return fmt.Errorf("generating final stable config: %w", err)
-	}
-
-	if err := c.provider.Reload(); err != nil {
-		return fmt.Errorf("reloading final stable: %w", err)
-	}
-
-	for _, old := range d.Old {
-		if err := c.docker.Stop(ctx, old.ID, 10); err != nil {
-			log.Printf("[canary] warning: stop %s: %v", old.ID[:12], err)
-		}
-
-		if err := c.docker.Remove(ctx, old.ID); err != nil {
-			log.Printf("[canary] warning: remove %s: %v", old.ID[:12], err)
-		}
+	if err := promoteAndDrain(ctx, "canary", c.docker, c.provider, d, d.Config.Affinity); err != nil {
+		return err
 	}
 
 	ds.Status = state.StatusIdle
@@ -153,50 +99,12 @@ func (c *Canary) Execute(ctx context.Context, d *Deployment) error {
 		return fmt.Errorf("saving final state: %w", err)
 	}
 
-	log.Printf("[canary] deployment complete for %s", d.Service)
+	slog.Info("deployment complete", "component", "canary", "service", d.Service)
 	return nil
 }
 
 func (c *Canary) Rollback(ctx context.Context, d *Deployment) error {
-	log.Printf("[canary] rolling back %s", d.Service)
-
-	upstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName()}
-	for _, old := range d.Old {
-		upstream.Servers = append(upstream.Servers, provider.Server{Addr: old.Addr})
-	}
-	applyNginxKeepalive(d, upstream)
-
-	if err := c.provider.GenerateConfig(upstream); err != nil {
-		return fmt.Errorf("generating rollback config: %w", err)
-	}
-
-	if err := c.provider.Reload(); err != nil {
-		return fmt.Errorf("reloading provider: %w", err)
-	}
-
-	for _, cn := range d.New {
-		if err := c.docker.Stop(ctx, cn.ID, 10); err != nil {
-			log.Printf("[canary] warning: stop %s: %v", cn.ID[:12], err)
-		}
-
-		if err := c.docker.Remove(ctx, cn.ID); err != nil {
-			log.Printf("[canary] warning: remove %s: %v", cn.ID[:12], err)
-		}
-	}
-
-	ds := &state.DeploymentState{
-		Service:    d.Service,
-		Status:     state.StatusIdle,
-		Strategy:   "canary",
-		Containers: state.Containers{Stable: containerIDs(d.Old)},
-	}
-
-	if err := c.state.Save(ds); err != nil {
-		return fmt.Errorf("saving rollback state: %w", err)
-	}
-
-	log.Printf("[canary] rollback complete for %s", d.Service)
-	return nil
+	return baseRollback(ctx, "canary", c.docker, c.provider, c.state, d)
 }
 
 func buildCanaryUpstream(d *Deployment, canaryWeight int) *provider.UpstreamState {
@@ -223,7 +131,7 @@ func buildCanaryUpstream(d *Deployment, canaryWeight int) *provider.UpstreamStat
 			Group:  "canary",
 		})
 	}
-	applyNginxKeepalive(d, upstream)
+	ApplyProviderSettings(d.Config, upstream)
 
 	return upstream
 }

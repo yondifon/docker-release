@@ -3,7 +3,7 @@ package rollback
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/malico/docker-release/internal/config"
 	"github.com/malico/docker-release/internal/provider"
@@ -12,12 +12,12 @@ import (
 )
 
 type ContainerResolver interface {
-	ResolveAddr(ctx context.Context, containerID string) (string, error)
+	ContainerAddr(ctx context.Context, containerID string) (string, error)
 }
 
 type Coordinator struct {
-	stateMgr  *state.Manager
-	resolver  ContainerResolver
+	stateMgr   *state.Manager
+	resolver   ContainerResolver
 	strategies map[string]strategy.Strategy
 }
 
@@ -53,7 +53,7 @@ func (c *Coordinator) Execute(ctx context.Context, service string) error {
 		return fmt.Errorf("saving rollback state: %w", err)
 	}
 
-	log.Printf("[rollback] rolling back %s (strategy=%s)", service, ds.Strategy)
+	slog.Info("rolling back", "component", "rollback", "service", service, "strategy", ds.Strategy)
 
 	old, err := c.resolveContainers(ctx, ds.Containers.Stable)
 	if err != nil {
@@ -95,7 +95,7 @@ func (c *Coordinator) ExecuteWithDeployment(ctx context.Context, d *strategy.Dep
 		return fmt.Errorf("saving rollback state: %w", err)
 	}
 
-	log.Printf("[rollback] rolling back %s (strategy=%s)", d.Service, ds.Strategy)
+	slog.Info("rolling back", "component", "rollback", "service", d.Service, "strategy", ds.Strategy)
 	return s.Rollback(ctx, d)
 }
 
@@ -103,9 +103,9 @@ func (c *Coordinator) resolveContainers(ctx context.Context, ids []string) ([]st
 	var containers []strategy.ContainerInfo
 
 	for _, id := range ids {
-		addr, err := c.resolver.ResolveAddr(ctx, id)
+		addr, err := c.resolver.ContainerAddr(ctx, id)
 		if err != nil {
-			log.Printf("[rollback] warning: cannot resolve %s, skipping: %v", id[:12], err)
+			slog.Warn("cannot resolve container, skipping", "component", "rollback", "container", id[:12], "err", err)
 			continue
 		}
 
@@ -120,5 +120,5 @@ func (c *Coordinator) resolveContainers(ctx context.Context, ids []string) ([]st
 
 type NoopProvider struct{}
 
-func (n *NoopProvider) GenerateConfig(_ *provider.UpstreamState) error { return nil }
-func (n *NoopProvider) Reload() error                                  { return nil }
+func (n *NoopProvider) GenerateConfig(_ context.Context, _ *provider.UpstreamState) error { return nil }
+func (n *NoopProvider) Reload(_ context.Context) error                                    { return nil }

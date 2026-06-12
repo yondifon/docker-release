@@ -17,7 +17,7 @@ type mockResolver struct {
 	addrs map[string]string
 }
 
-func (m *mockResolver) ResolveAddr(_ context.Context, containerID string) (string, error) {
+func (m *mockResolver) ContainerAddr(_ context.Context, containerID string) (string, error) {
 	addr, ok := m.addrs[containerID]
 	if !ok {
 		return "", fmt.Errorf("container %s not found", containerID)
@@ -212,11 +212,11 @@ func TestCoordinatorSkipsMissingContainers(t *testing.T) {
 func TestNoopProvider(t *testing.T) {
 	var p provider.Provider = &NoopProvider{}
 
-	if err := p.GenerateConfig(nil); err != nil {
+	if err := p.GenerateConfig(context.Background(), nil); err != nil {
 		t.Error(err)
 	}
 
-	if err := p.Reload(); err != nil {
+	if err := p.Reload(context.Background()); err != nil {
 		t.Error(err)
 	}
 }

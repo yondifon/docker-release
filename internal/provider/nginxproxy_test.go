@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,7 +41,7 @@ func TestNginxProxyNoServices(t *testing.T) {
 		},
 	}
 
-	if err := p.GenerateConfig(state); err != nil {
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 
@@ -85,7 +86,7 @@ func TestNginxProxyWithWeights(t *testing.T) {
 		},
 	}
 
-	if err := p.GenerateConfig(state); err != nil {
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 
@@ -120,7 +121,7 @@ func TestNginxProxyWithDrain(t *testing.T) {
 		},
 	}
 
-	if err := p.GenerateConfig(state); err != nil {
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 
@@ -147,7 +148,7 @@ func TestNginxProxyKeepalive(t *testing.T) {
 		},
 	}
 
-	if err := p.GenerateConfig(state); err != nil {
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 
@@ -166,14 +167,14 @@ func TestNginxProxyMultipleServices(t *testing.T) {
 
 	p := NewNginxProxyFromString(path, stockTemplate)
 
-	if err := p.GenerateConfig(&UpstreamState{
+	if err := p.GenerateConfig(context.Background(), &UpstreamState{
 		Service: "webapp",
 		Servers: []Server{{Addr: "172.18.0.5:3000"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := p.GenerateConfig(&UpstreamState{
+	if err := p.GenerateConfig(context.Background(), &UpstreamState{
 		Service: "apiapp",
 		Servers: []Server{{Addr: "172.18.0.10:8080"}},
 	}); err != nil {
@@ -207,7 +208,7 @@ func TestNginxProxyRemoveService(t *testing.T) {
 
 	p := NewNginxProxyFromString(path, stockTemplate)
 
-	p.GenerateConfig(&UpstreamState{
+	p.GenerateConfig(context.Background(), &UpstreamState{
 		Service: "app",
 		Servers: []Server{{Addr: "172.18.0.5:80"}},
 	})
@@ -231,7 +232,7 @@ func TestNginxProxyPreservesOriginalFallback(t *testing.T) {
 
 	p := NewNginxProxyFromString(path, stockTemplate)
 
-	p.GenerateConfig(&UpstreamState{
+	p.GenerateConfig(context.Background(), &UpstreamState{
 		Service: "app",
 		Servers: []Server{{Addr: "172.18.0.5:80"}},
 	})
@@ -255,7 +256,7 @@ func TestNginxProxyAtomicWrite(t *testing.T) {
 
 	p := NewNginxProxyFromString(path, stockTemplate)
 
-	p.GenerateConfig(&UpstreamState{
+	p.GenerateConfig(context.Background(), &UpstreamState{
 		Service: "app",
 		Servers: []Server{{Addr: "172.18.0.5:80"}},
 	})
@@ -281,7 +282,7 @@ func TestNginxProxyUpstreamNameOverride(t *testing.T) {
 		},
 	}
 
-	if err := p.GenerateConfig(state); err != nil {
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 
@@ -354,4 +355,3 @@ func TestNginxProxyBackupSkippedWithIpHash(t *testing.T) {
 		}
 	}
 }
-

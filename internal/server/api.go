@@ -3,7 +3,7 @@ package server
 import (
 	"crypto/subtle"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -151,7 +151,7 @@ func (s *Server) handleCancelByService(w http.ResponseWriter, r *http.Request) {
 func (s *Server) findDeployment(id string) (*DeploymentStatus, error) {
 	states, err := s.listAll()
 	if err != nil {
-		log.Printf("[server] findDeployment: %v", err)
+		slog.Error("findDeployment failed", "component", "server", "err", err)
 		return nil, err
 	}
 	active := s.ctrl.ActiveDeployments()
@@ -186,7 +186,7 @@ func (s *Server) findDeployment(id string) (*DeploymentStatus, error) {
 func (s *Server) pendingCommandsByService() map[string][]PendingCommand {
 	cmds, err := s.mgr.PendingReleaseCommands()
 	if err != nil {
-		log.Printf("[server] pending commands: %v", err)
+		slog.Error("pending commands failed", "component", "server", "err", err)
 		return map[string][]PendingCommand{}
 	}
 	out := make(map[string][]PendingCommand, len(cmds))
@@ -232,6 +232,6 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("[server] encode response: %v", err)
+		slog.Error("encode response failed", "component", "server", "err", err)
 	}
 }

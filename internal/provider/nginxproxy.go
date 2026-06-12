@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"crypto/sha1"
 	"embed"
 	"fmt"
@@ -84,7 +85,7 @@ func NewNginxProxyFromString(templatePath string, stockTmpl string) *NginxProxyP
 	}
 }
 
-func (p *NginxProxyProvider) GenerateConfig(state *UpstreamState) error {
+func (p *NginxProxyProvider) GenerateConfig(ctx context.Context, state *UpstreamState) error {
 	if err := state.Validate(); err != nil {
 		return err
 	}
@@ -106,7 +107,7 @@ func (p *NginxProxyProvider) RemoveService(service string) error {
 	return p.writeTemplate()
 }
 
-func (p *NginxProxyProvider) Reload() error {
+func (p *NginxProxyProvider) Reload(ctx context.Context) error {
 	return nil
 }
 

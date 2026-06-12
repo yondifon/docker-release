@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,7 +221,7 @@ func TestHAProxyGenerateConfigWritesFile(t *testing.T) {
 		Servers: []Server{{Addr: "172.18.0.5:3000"}},
 	}
 
-	if err := p.GenerateConfig(state); err != nil {
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
 		t.Fatalf("generate error: %v", err)
 	}
 
@@ -246,4 +247,3 @@ func TestHAProxyGenerateConfigWritesFile(t *testing.T) {
 		t.Error("temp file not cleaned up")
 	}
 }
-

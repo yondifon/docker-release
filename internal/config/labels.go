@@ -31,26 +31,26 @@ const (
 )
 
 type ServiceConfig struct {
-	Enabled            bool
-	Provider           ProviderType
-	Strategy           Strategy
-	HealthCheckTimeout time.Duration
-	DrainTimeout       time.Duration
-	Affinity           string
-	NginxService       string
-	NginxConfigDir     string
-	NginxKeepalive     int
+	Enabled              bool
+	Provider             ProviderType
+	Strategy             Strategy
+	HealthCheckTimeout   time.Duration
+	DrainTimeout         time.Duration
+	Affinity             string
+	NginxService         string
+	NginxConfigDir       string
+	NginxKeepalive       int
 	AngieService         string
 	AngieConfigDir       string
 	AngieKeepalive       int
 	AngieStickyLearnName string
-	TraefikConfigDir   string
-	CaddyService       string
-	CaddyConfigDir     string
-	CaddyKeepalive     int
-	HAProxyService     string
-	HAProxyConfigDir   string
-	UpstreamName       string
+	TraefikConfigDir     string
+	CaddyService         string
+	CaddyConfigDir       string
+	CaddyKeepalive       int
+	HAProxyService       string
+	HAProxyConfigDir     string
+	UpstreamName         string
 
 	BlueGreen BlueGreenConfig
 	Canary    CanaryConfig
@@ -73,26 +73,26 @@ func ParseLabels(labels map[string]string) (*ServiceConfig, error) {
 	}
 
 	cfg := &ServiceConfig{
-		Enabled:            true,
-		Provider:           ProviderType(getOr(labels, "release.provider", "nginx-proxy")),
-		Strategy:           Strategy(getOr(labels, "release.strategy", "linear")),
-		HealthCheckTimeout: parseDurationOr(labels, "release.health_check_timeout", 60*time.Second),
-		DrainTimeout:       parseDurationOr(labels, "release.drain_timeout", 10*time.Second),
-		Affinity:           resolveAffinity(labels),
-		NginxService:       getOr(labels, "release.nginx.service", ""),
-		NginxConfigDir:     getOr(labels, "release.nginx.config_dir", ""),
-		NginxKeepalive:     parseIntOr(labels, "release.nginx.keepalive", -1),
+		Enabled:              true,
+		Provider:             ProviderType(getOr(labels, "release.provider", "nginx-proxy")),
+		Strategy:             Strategy(getOr(labels, "release.strategy", "linear")),
+		HealthCheckTimeout:   parseDurationOr(labels, "release.health_check_timeout", 60*time.Second),
+		DrainTimeout:         parseDurationOr(labels, "release.drain_timeout", 10*time.Second),
+		Affinity:             resolveAffinity(labels),
+		NginxService:         getOr(labels, "release.nginx.service", ""),
+		NginxConfigDir:       getOr(labels, "release.nginx.config_dir", ""),
+		NginxKeepalive:       parseIntOr(labels, "release.nginx.keepalive", -1),
 		AngieService:         getOr(labels, "release.angie.service", ""),
 		AngieConfigDir:       getOr(labels, "release.angie.config_dir", ""),
 		AngieKeepalive:       parseIntOr(labels, "release.angie.keepalive", -1),
 		AngieStickyLearnName: getOr(labels, "release.angie.sticky.learn.name", ""),
-		TraefikConfigDir:   getOr(labels, "release.traefik.config_dir", ""),
-		CaddyService:       getOr(labels, "release.caddy.service", ""),
-		CaddyConfigDir:     getOr(labels, "release.caddy.config_dir", ""),
-		CaddyKeepalive:     parseIntOr(labels, "release.caddy.keepalive", -1),
-		HAProxyService:     getOr(labels, "release.haproxy.service", ""),
-		HAProxyConfigDir:   getOr(labels, "release.haproxy.config_dir", ""),
-		UpstreamName:       getOr(labels, "release.upstream", ""),
+		TraefikConfigDir:     getOr(labels, "release.traefik.config_dir", ""),
+		CaddyService:         getOr(labels, "release.caddy.service", ""),
+		CaddyConfigDir:       getOr(labels, "release.caddy.config_dir", ""),
+		CaddyKeepalive:       parseIntOr(labels, "release.caddy.keepalive", -1),
+		HAProxyService:       getOr(labels, "release.haproxy.service", ""),
+		HAProxyConfigDir:     getOr(labels, "release.haproxy.config_dir", ""),
+		UpstreamName:         getOr(labels, "release.upstream", ""),
 
 		BlueGreen: BlueGreenConfig{
 			SoakTime:    parseDurationOr(labels, "release.bg.soak_time", 5*time.Minute),
@@ -213,40 +213,47 @@ func containsDotDot(p string) bool {
 	return false
 }
 
-func (c *ServiceConfig) ResolveNginxKeepalive(serverCount int) int {
-	if c.NginxKeepalive >= 0 {
-		return c.NginxKeepalive
+// resolveKeepalive applies the shared rule: a configured value (>= 0) wins;
+// otherwise auto-size to serverCount+1, or 0 when there are no servers.
+func resolveKeepalive(configured, serverCount int) int {
+	if configured >= 0 {
+		return configured
 	}
-
 	if serverCount <= 0 {
 		return 0
 	}
-
 	return serverCount + 1
+}
+
+func (c *ServiceConfig) ResolveNginxKeepalive(serverCount int) int {
+	return resolveKeepalive(c.NginxKeepalive, serverCount)
 }
 
 func (c *ServiceConfig) ResolveCaddyKeepalive(serverCount int) int {
-	if c.CaddyKeepalive >= 0 {
-		return c.CaddyKeepalive
-	}
-
-	if serverCount <= 0 {
-		return 0
-	}
-
-	return serverCount + 1
+	return resolveKeepalive(c.CaddyKeepalive, serverCount)
 }
 
 func (c *ServiceConfig) ResolveAngieKeepalive(serverCount int) int {
-	if c.AngieKeepalive >= 0 {
-		return c.AngieKeepalive
-	}
+	return resolveKeepalive(c.AngieKeepalive, serverCount)
+}
 
-	if serverCount <= 0 {
-		return 0
+// ConfigDir returns the provider-specific config directory. Returns "" for
+// providers that don't write per-service config files.
+func (c *ServiceConfig) ConfigDir() string {
+	switch c.Provider {
+	case ProviderNginx:
+		return c.NginxConfigDir
+	case ProviderAngie:
+		return c.AngieConfigDir
+	case ProviderTraefik:
+		return c.TraefikConfigDir
+	case ProviderCaddy:
+		return c.CaddyConfigDir
+	case ProviderHAProxy:
+		return c.HAProxyConfigDir
+	default:
+		return ""
 	}
-
-	return serverCount + 1
 }
 
 func getOr(labels map[string]string, key, fallback string) string {

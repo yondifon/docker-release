@@ -28,7 +28,7 @@ func NewAngie(configDir string, dockerClient *docker.Client, serviceName, projec
 }
 
 // GenerateConfig creates an Angie upstream configuration file
-func (p *AngieProvider) GenerateConfig(state *UpstreamState) error {
+func (p *AngieProvider) GenerateConfig(ctx context.Context, state *UpstreamState) error {
 	if err := state.Validate(); err != nil {
 		return err
 	}
@@ -54,9 +54,7 @@ func (p *AngieProvider) GenerateConfig(state *UpstreamState) error {
 	return nil
 }
 
-func (p *AngieProvider) Reload() error {
-	ctx := context.Background()
-
+func (p *AngieProvider) Reload(ctx context.Context) error {
 	ctr, running, err := resolveProxyContainer(ctx, p.docker, p.project, p.serviceName, "angie")
 	if err != nil {
 		return fmt.Errorf("resolving angie container: %w", err)

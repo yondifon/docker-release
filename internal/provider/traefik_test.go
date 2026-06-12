@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,7 +207,7 @@ func TestTraefikGenerateConfigWritesFile(t *testing.T) {
 		},
 	}
 
-	if err := p.GenerateConfig(state); err != nil {
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
 		t.Fatalf("generate error: %v", err)
 	}
 
@@ -233,7 +234,7 @@ func TestTraefikGenerateConfigWritesFile(t *testing.T) {
 func TestTraefikReloadIsNoop(t *testing.T) {
 	p := NewTraefik("/tmp/test")
 
-	if err := p.Reload(); err != nil {
+	if err := p.Reload(context.Background()); err != nil {
 		t.Errorf("reload should be no-op, got: %v", err)
 	}
 }
@@ -256,4 +257,3 @@ func TestTraefikBackupServersDropped(t *testing.T) {
 		t.Error("backup server should be silently dropped for traefik")
 	}
 }
-
