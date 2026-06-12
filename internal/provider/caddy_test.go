@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,7 +191,7 @@ func TestCaddyGenerateConfigWritesFile(t *testing.T) {
 		Servers: []Server{{Addr: "172.18.0.5:3000"}},
 	}
 
-	if err := p.GenerateConfig(state); err != nil {
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
 		t.Fatalf("generate error: %v", err)
 	}
 

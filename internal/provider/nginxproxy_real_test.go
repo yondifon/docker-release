@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -65,7 +66,7 @@ func TestNginxProxyWithRealTemplate(t *testing.T) {
 		},
 	}
 
-	if err := p.GenerateConfig(state); err != nil {
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 

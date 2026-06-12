@@ -3,7 +3,7 @@ package strategy
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/malico/docker-release/internal/provider"
@@ -31,20 +31,14 @@ func NewLinear(docker DockerOps, prov provider.Provider, stateMgr *state.Manager
 }
 
 func (l *Linear) Execute(ctx context.Context, d *Deployment) error {
-	log.Printf("[linear] starting deployment for %s: %d old → %d new", d.Service, len(d.Old), len(d.New))
-
-	prev, _ := l.state.Load(d.Service)
-	prevDeployID := ""
-	if prev != nil {
-		prevDeployID = prev.ActiveDeploymentID
-	}
+	slog.Info("starting deployment", "component", "linear", "service", d.Service, "old", len(d.Old), "new", len(d.New))
 
 	ds := &state.DeploymentState{
 		Service:              d.Service,
 		Status:               state.StatusInProgress,
 		Strategy:             "linear",
-		ActiveDeploymentID:   state.GenerateDeploymentID(),
-		PreviousDeploymentID: prevDeployID,
+		ActiveDeploymentID:   d.resolveDeployID(),
+		PreviousDeploymentID: d.PrevDeployID,
 		Containers: state.Containers{
 			Stable: containerIDs(d.Old),
 		},
@@ -63,37 +57,37 @@ func (l *Linear) Execute(ctx context.Context, d *Deployment) error {
 		oldC := d.Old[i]
 		newC := d.New[i]
 
-		log.Printf("[linear] step %d/%d: replacing %s with %s", i+1, replacements, oldC.ID[:12], newC.ID[:12])
+		slog.Info("replacing container", "component", "linear", "service", d.Service, "step", i+1, "steps", replacements, "old", oldC.ID[:12], "new", newC.ID[:12])
 
-		log.Printf("[linear] waiting for %s to be healthy", newC.ID[:12])
+		slog.Info("waiting for container to be healthy", "component", "linear", "container", newC.ID[:12])
 		if err := l.docker.WaitHealthy(ctx, newC.ID, d.Config.HealthCheckTimeout); err != nil {
 			return fmt.Errorf("health check failed for %s: %w", newC.ID[:12], err)
 		}
 
 		upstream := l.buildUpstream(d, i)
-		applyNginxKeepalive(d, upstream)
-		if err := l.provider.GenerateConfig(upstream); err != nil {
+		ApplyProviderSettings(d.Config, upstream)
+		if err := l.provider.GenerateConfig(ctx, upstream); err != nil {
 			return fmt.Errorf("generating config: %w", err)
 		}
 
-		if err := l.provider.Reload(); err != nil {
+		if err := l.provider.Reload(ctx); err != nil {
 			return fmt.Errorf("reloading provider: %w", err)
 		}
 
-		log.Printf("[linear] draining %s for %s", oldC.ID[:12], d.Config.DrainTimeout)
+		slog.Info("draining container", "component", "linear", "container", oldC.ID[:12], "timeout", d.Config.DrainTimeout)
 		select {
 		case <-time.After(d.Config.DrainTimeout):
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 
-		log.Printf("[linear] stopping %s", oldC.ID[:12])
+		slog.Info("stopping container", "component", "linear", "container", oldC.ID[:12])
 		if err := l.docker.Stop(ctx, oldC.ID, 10); err != nil {
-			log.Printf("[linear] warning: stop %s: %v", oldC.ID[:12], err)
+			slog.Warn("stop failed", "component", "linear", "container", oldC.ID[:12], "err", err)
 		}
 
 		if err := l.docker.Remove(ctx, oldC.ID); err != nil {
-			log.Printf("[linear] warning: remove %s: %v", oldC.ID[:12], err)
+			slog.Warn("remove failed", "component", "linear", "container", oldC.ID[:12], "err", err)
 		}
 
 		ds.Containers.Stable = containerIDs(d.New[:i+1])
@@ -107,7 +101,7 @@ func (l *Linear) Execute(ctx context.Context, d *Deployment) error {
 
 	if len(d.New) > len(d.Old) {
 		for i := len(d.Old); i < len(d.New); i++ {
-			log.Printf("[linear] waiting for extra container %s to be healthy", d.New[i].ID[:12])
+			slog.Info("waiting for extra container to be healthy", "component", "linear", "container", d.New[i].ID[:12])
 			if err := l.docker.WaitHealthy(ctx, d.New[i].ID, d.Config.HealthCheckTimeout); err != nil {
 				return fmt.Errorf("health check failed for %s: %w", d.New[i].ID[:12], err)
 			}
@@ -115,22 +109,22 @@ func (l *Linear) Execute(ctx context.Context, d *Deployment) error {
 	}
 
 	upstream := l.buildFinalUpstream(d, d.Config.Affinity)
-	applyNginxKeepalive(d, upstream)
-	if err := l.provider.GenerateConfig(upstream); err != nil {
+	ApplyProviderSettings(d.Config, upstream)
+	if err := l.provider.GenerateConfig(ctx, upstream); err != nil {
 		return fmt.Errorf("generating final deployment config: %w", err)
 	}
 
-	if err := l.provider.Reload(); err != nil {
+	if err := l.provider.Reload(ctx); err != nil {
 		return fmt.Errorf("reloading final deployment config: %w", err)
 	}
 
 	stableUpstream := l.buildFinalUpstream(d, "")
-	applyNginxKeepalive(d, stableUpstream)
-	if err := l.provider.GenerateConfig(stableUpstream); err != nil {
+	ApplyProviderSettings(d.Config, stableUpstream)
+	if err := l.provider.GenerateConfig(ctx, stableUpstream); err != nil {
 		return fmt.Errorf("generating final stable config: %w", err)
 	}
 
-	if err := l.provider.Reload(); err != nil {
+	if err := l.provider.Reload(ctx); err != nil {
 		return fmt.Errorf("reloading final stable config: %w", err)
 	}
 
@@ -141,54 +135,12 @@ func (l *Linear) Execute(ctx context.Context, d *Deployment) error {
 		return fmt.Errorf("saving final state: %w", err)
 	}
 
-	log.Printf("[linear] deployment complete for %s", d.Service)
+	slog.Info("deployment complete", "component", "linear", "service", d.Service)
 	return nil
 }
 
 func (l *Linear) Rollback(ctx context.Context, d *Deployment) error {
-	log.Printf("[linear] rolling back %s", d.Service)
-
-	upstream := &provider.UpstreamState{
-		Service:      d.Service,
-		UpstreamName: d.UpstreamName(),
-	}
-
-	for _, c := range d.Old {
-		upstream.Servers = append(upstream.Servers, provider.Server{Addr: c.Addr})
-	}
-	applyNginxKeepalive(d, upstream)
-
-	if err := l.provider.GenerateConfig(upstream); err != nil {
-		return fmt.Errorf("generating rollback config: %w", err)
-	}
-
-	if err := l.provider.Reload(); err != nil {
-		return fmt.Errorf("reloading provider: %w", err)
-	}
-
-	for _, c := range d.New {
-		if err := l.docker.Stop(ctx, c.ID, 10); err != nil {
-			log.Printf("[linear] warning: stop %s: %v", c.ID[:12], err)
-		}
-
-		if err := l.docker.Remove(ctx, c.ID); err != nil {
-			log.Printf("[linear] warning: remove %s: %v", c.ID[:12], err)
-		}
-	}
-
-	ds := &state.DeploymentState{
-		Service:    d.Service,
-		Status:     state.StatusIdle,
-		Strategy:   "linear",
-		Containers: state.Containers{Stable: containerIDs(d.Old)},
-	}
-
-	if err := l.state.Save(ds); err != nil {
-		return fmt.Errorf("saving rollback state: %w", err)
-	}
-
-	log.Printf("[linear] rollback complete for %s", d.Service)
-	return nil
+	return baseRollback(ctx, "linear", l.docker, l.provider, l.state, d)
 }
 
 func (l *Linear) buildUpstream(d *Deployment, step int) *provider.UpstreamState {

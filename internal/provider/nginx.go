@@ -27,7 +27,7 @@ func NewNginx(configDir string, dockerClient *docker.Client, serviceName, projec
 	}
 }
 
-func (p *NginxProvider) GenerateConfig(state *UpstreamState) error {
+func (p *NginxProvider) GenerateConfig(ctx context.Context, state *UpstreamState) error {
 	if err := state.Validate(); err != nil {
 		return err
 	}
@@ -53,9 +53,7 @@ func (p *NginxProvider) GenerateConfig(state *UpstreamState) error {
 	return nil
 }
 
-func (p *NginxProvider) Reload() error {
-	ctx := context.Background()
-
+func (p *NginxProvider) Reload(ctx context.Context) error {
 	ctr, running, err := resolveProxyContainer(ctx, p.docker, p.project, p.serviceName, "nginx")
 	if err != nil {
 		return fmt.Errorf("resolving nginx container: %w", err)

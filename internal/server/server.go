@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -49,7 +49,7 @@ func ConfigFromEnv() Config {
 	cfg.APIEnabled = envBool("DR_EXPOSE_API")
 	cfg.WebEnabled = envBool("DR_EXPOSE_WEB")
 	if cfg.APIEnabled && cfg.APIToken == "" {
-		log.Printf("[server] WARNING: DR_API_TOKEN not set; cancel endpoints are unauthenticated")
+		slog.Warn("DR_API_TOKEN not set; cancel endpoints are unauthenticated", "component", "server")
 	}
 	return cfg
 }
@@ -137,13 +137,13 @@ func (s *Server) listenAndServe(ctx context.Context, port int, mux http.Handler)
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutCtx); err != nil {
-			log.Printf("[server] shutdown %s: %v", addr, err)
+			slog.Warn("shutdown error", "component", "server", "addr", addr, "err", err)
 		}
 	}()
 
-	log.Printf("[server] listening on %s", addr)
+	slog.Info("listening", "component", "server", "addr", addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Printf("[server] %s: %v", addr, err)
+		slog.Error("listener error", "component", "server", "addr", addr, "err", err)
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
 	return nil
@@ -163,7 +163,7 @@ func envIntOr(key string, fallback int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 1 || n > 65535 {
-		log.Printf("[server] invalid %s=%q, using %d", key, v, fallback)
+		slog.Warn("invalid env value, using fallback", "component", "server", "key", key, "value", v, "fallback", fallback)
 		return fallback
 	}
 	return n

@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -192,7 +192,7 @@ func (m *Manager) ListAll() ([]*DeploymentState, error) {
 		}
 		s, err := m.Load(service)
 		if err != nil {
-			log.Printf("[state] skipping %s: %v", name, err)
+			slog.Warn("skipping state file", "component", "state", "file", name, "err", err)
 			continue
 		}
 		result = append(result, s)

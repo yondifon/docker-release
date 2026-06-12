@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,7 +18,7 @@ func NewTraefik(configDir string) *TraefikProvider {
 	return &TraefikProvider{configDir: configDir}
 }
 
-func (p *TraefikProvider) GenerateConfig(state *UpstreamState) error {
+func (p *TraefikProvider) GenerateConfig(ctx context.Context, state *UpstreamState) error {
 	if err := state.Validate(); err != nil {
 		return err
 	}
@@ -43,7 +44,7 @@ func (p *TraefikProvider) GenerateConfig(state *UpstreamState) error {
 	return nil
 }
 
-func (p *TraefikProvider) Reload() error {
+func (p *TraefikProvider) Reload(ctx context.Context) error {
 	return nil
 }
 

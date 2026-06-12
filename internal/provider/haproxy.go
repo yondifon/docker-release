@@ -27,7 +27,7 @@ func NewHAProxy(configDir string, dockerClient *docker.Client, serviceName, proj
 	}
 }
 
-func (p *HAProxyProvider) GenerateConfig(state *UpstreamState) error {
+func (p *HAProxyProvider) GenerateConfig(ctx context.Context, state *UpstreamState) error {
 	if err := state.Validate(); err != nil {
 		return err
 	}
@@ -53,9 +53,7 @@ func (p *HAProxyProvider) GenerateConfig(state *UpstreamState) error {
 	return nil
 }
 
-func (p *HAProxyProvider) Reload() error {
-	ctx := context.Background()
-
+func (p *HAProxyProvider) Reload(ctx context.Context) error {
 	ctr, running, err := resolveProxyContainer(ctx, p.docker, p.project, p.serviceName, "haproxy")
 	if err != nil {
 		return fmt.Errorf("resolving haproxy container: %w", err)

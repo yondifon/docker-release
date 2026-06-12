@@ -3,7 +3,7 @@ package server
 import (
 	"embed"
 	"html/template"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -46,7 +46,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	states, err := s.listAll()
 	if err != nil {
-		log.Printf("[server] web list: %v", err)
+		slog.Error("web list failed", "component", "server", "err", err)
 		states = nil
 	}
 	data := pageData{
@@ -55,19 +55,19 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
-		log.Printf("[server] web render: %v", err)
+		slog.Error("web render failed", "component", "server", "err", err)
 	}
 }
 
 func (s *Server) handlePartialServices(w http.ResponseWriter, r *http.Request) {
 	states, err := s.listAll()
 	if err != nil {
-		log.Printf("[server] partial list: %v", err)
+		slog.Error("partial list failed", "component", "server", "err", err)
 		states = nil
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tmpl.ExecuteTemplate(w, "rows", toServiceViews(states)); err != nil {
-		log.Printf("[server] partial render: %v", err)
+		slog.Error("partial render failed", "component", "server", "err", err)
 	}
 }
 

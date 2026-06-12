@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -19,7 +19,21 @@ import (
 
 var version = "dev"
 
+func setupLogging() {
+	level := slog.LevelInfo
+	switch strings.ToLower(os.Getenv("DR_LOG_LEVEL")) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+}
+
 func main() {
+	setupLogging()
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
@@ -146,7 +160,7 @@ func run(fn func(*controller.Controller) error) {
 		fmt.Fprintf(os.Stderr, "error: cannot determine compose project name: %v\n", err)
 		os.Exit(1)
 	}
-	log.Printf("compose project: %s", project)
+	slog.Info("detected compose project", "component", "main", "project", project)
 
 	mgr := state.NewManager("/var/lib/docker-release", project)
 	ctrl := controller.New(dockerClient, mgr, project)
@@ -167,7 +181,7 @@ func cmdWatch(ctrl *controller.Controller) error {
 		srv := server.New(cfg, ctrl, ctrl.StateManager(), ctrl.Project())
 		go func() {
 			if err := srv.Start(ctx); err != nil {
-				log.Printf("[server] %v", err)
+				slog.Error("server error", "component", "main", "err", err)
 			}
 		}()
 	}

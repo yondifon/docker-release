@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,7 +236,7 @@ func TestAngieGenerateConfigWritesFile(t *testing.T) {
 		},
 	}
 
-	if err := p.GenerateConfig(state); err != nil {
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
 		t.Fatalf("generate error: %v", err)
 	}
 
@@ -289,4 +290,3 @@ func TestAngieRenderUpstreamStickyLearn(t *testing.T) {
 		t.Error("should not use sticky cookie when learn name is set")
 	}
 }
-

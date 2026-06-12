@@ -329,15 +329,20 @@ func (c *Client) ContainerAddr(ctx context.Context, containerID string) (string,
 	return "", fmt.Errorf("no network address for container %s", containerID[:12])
 }
 
+// firstExposedPort returns the lowest-numbered exposed port so the chosen
+// upstream address is stable across calls (ExposedPorts is a map; ranging it
+// is nondeterministic and could flip the port between config regenerations).
 func firstExposedPort(info types.ContainerJSON) string {
+	best := -1
 	for port := range info.Config.ExposedPorts {
-		return port.Port()
+		if n := port.Int(); n > 0 && (best == -1 || n < best) {
+			best = n
+		}
 	}
-	return "80"
-}
-
-func (c *Client) ResolveAddr(ctx context.Context, containerID string) (string, error) {
-	return c.ContainerAddr(ctx, containerID)
+	if best == -1 {
+		return "80"
+	}
+	return strconv.Itoa(best)
 }
 
 func (c *Client) IsHealthy(ctx context.Context, containerID string) (bool, error) {

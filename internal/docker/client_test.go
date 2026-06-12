@@ -299,3 +299,29 @@ func TestCreateContainerFromImage_CleansUpOnStartFailure(t *testing.T) {
 		t.Errorf("expected container new-id to be removed on failure, got %v", mock.removedIDs)
 	}
 }
+
+func TestFirstExposedPortDeterministic(t *testing.T) {
+	info := types.ContainerJSON{
+		Config: &container.Config{
+			ExposedPorts: nat.PortSet{
+				"9090/tcp": struct{}{},
+				"8080/tcp": struct{}{},
+				"8443/tcp": struct{}{},
+			},
+		},
+	}
+
+	// Lowest-numbered port wins, regardless of map iteration order.
+	for i := 0; i < 50; i++ {
+		if got := firstExposedPort(info); got != "8080" {
+			t.Fatalf("firstExposedPort: want 8080, got %s", got)
+		}
+	}
+}
+
+func TestFirstExposedPortFallback(t *testing.T) {
+	info := types.ContainerJSON{Config: &container.Config{}}
+	if got := firstExposedPort(info); got != "80" {
+		t.Errorf("firstExposedPort with no ports: want 80, got %s", got)
+	}
+}

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 )
 
@@ -16,13 +16,13 @@ type HealthChecker interface {
 }
 
 type HealthMonitor struct {
-	checker          HealthChecker
-	interval         time.Duration
-	gracePeriod      time.Duration
-	maxRestarts      int
-	containerIDs     []string
-	initialRestarts  map[string]int
-	onUnhealthy      func(containerID string, reason string)
+	checker         HealthChecker
+	interval        time.Duration
+	gracePeriod     time.Duration
+	maxRestarts     int
+	containerIDs    []string
+	initialRestarts map[string]int
+	onUnhealthy     func(containerID string, reason string)
 }
 
 func NewHealthMonitor(checker HealthChecker, containerIDs []string, onUnhealthy func(string, string)) *HealthMonitor {
@@ -50,7 +50,7 @@ func (m *HealthMonitor) SetGracePeriod(d time.Duration) {
 
 func (m *HealthMonitor) Run(ctx context.Context) error {
 	if m.gracePeriod > 0 {
-		log.Printf("[monitor] waiting %s grace period before health checks", m.gracePeriod)
+		slog.Info("waiting grace period before health checks", "component", "monitor", "grace", m.gracePeriod)
 		select {
 		case <-time.After(m.gracePeriod):
 		case <-ctx.Done():
@@ -66,7 +66,7 @@ func (m *HealthMonitor) Run(ctx context.Context) error {
 		m.initialRestarts[id] = count
 	}
 
-	log.Printf("[monitor] watching %d container(s), interval=%s, max_restarts=%d", len(m.containerIDs), m.interval, m.maxRestarts)
+	slog.Info("watching containers", "component", "monitor", "count", len(m.containerIDs), "interval", m.interval, "max_restarts", m.maxRestarts)
 
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
@@ -91,27 +91,27 @@ func (m *HealthMonitor) check(ctx context.Context) (bool, error) {
 	for _, id := range m.containerIDs {
 		healthy, err := m.checker.IsHealthy(ctx, id)
 		if err != nil {
-			log.Printf("[monitor] warning: checking %s: %v", id[:12], err)
+			slog.Warn("health check failed", "component", "monitor", "container", id[:12], "err", err)
 			continue
 		}
 
 		if !healthy {
 			reason := fmt.Sprintf("container %s is unhealthy", id[:12])
-			log.Printf("[monitor] %s", reason)
+			slog.Warn("unhealthy container detected", "component", "monitor", "container", id[:12])
 			m.onUnhealthy(id, reason)
 			return true, nil
 		}
 
 		count, err := m.checker.RestartCount(ctx, id)
 		if err != nil {
-			log.Printf("[monitor] warning: restart count %s: %v", id[:12], err)
+			slog.Warn("restart count check failed", "component", "monitor", "container", id[:12], "err", err)
 			continue
 		}
 
 		restarts := count - m.initialRestarts[id]
 		if restarts >= m.maxRestarts {
 			reason := fmt.Sprintf("container %s restarted %d times (max %d)", id[:12], restarts, m.maxRestarts)
-			log.Printf("[monitor] %s", reason)
+			slog.Warn("container exceeded restart limit", "component", "monitor", "container", id[:12], "restarts", restarts, "max", m.maxRestarts)
 			m.onUnhealthy(id, reason)
 			return true, nil
 		}

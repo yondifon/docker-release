@@ -41,12 +41,12 @@ type mockProvider struct {
 	reloadErr error
 }
 
-func (m *mockProvider) GenerateConfig(s *provider.UpstreamState) error {
+func (m *mockProvider) GenerateConfig(_ context.Context, s *provider.UpstreamState) error {
 	m.configs = append(m.configs, s)
 	return m.genErr
 }
 
-func (m *mockProvider) Reload() error {
+func (m *mockProvider) Reload(_ context.Context) error {
 	m.reloads++
 	return m.reloadErr
 }

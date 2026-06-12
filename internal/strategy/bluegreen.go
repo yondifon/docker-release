@@ -3,7 +3,7 @@ package strategy
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/malico/docker-release/internal/provider"
@@ -25,20 +25,14 @@ func NewBlueGreen(docker DockerOps, prov provider.Provider, stateMgr *state.Mana
 }
 
 func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
-	log.Printf("[blue-green] starting deployment for %s: %d old (blue) → %d new (green)", d.Service, len(d.Old), len(d.New))
-
-	prev, _ := bg.state.Load(d.Service)
-	prevDeployID := ""
-	if prev != nil {
-		prevDeployID = prev.ActiveDeploymentID
-	}
+	slog.Info("starting deployment", "component", "blue-green", "service", d.Service, "blue", len(d.Old), "green", len(d.New))
 
 	ds := &state.DeploymentState{
 		Service:              d.Service,
 		Status:               state.StatusInProgress,
 		Strategy:             "blue-green",
-		ActiveDeploymentID:   state.GenerateDeploymentID(),
-		PreviousDeploymentID: prevDeployID,
+		ActiveDeploymentID:   d.resolveDeployID(),
+		PreviousDeploymentID: d.PrevDeployID,
 		Containers: state.Containers{
 			Stable: containerIDs(d.Old),
 			Canary: containerIDs(d.New),
@@ -49,21 +43,18 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 		return fmt.Errorf("saving initial state: %w", err)
 	}
 
-	for _, c := range d.New {
-		log.Printf("[blue-green] waiting for %s to be healthy", c.ID[:12])
-		if err := bg.docker.WaitHealthy(ctx, c.ID, d.Config.HealthCheckTimeout); err != nil {
-			return fmt.Errorf("health check failed for %s: %w", c.ID[:12], err)
-		}
+	if err := waitAllHealthy(ctx, "blue-green", bg.docker, d); err != nil {
+		return err
 	}
 
-	log.Printf("[blue-green] all green containers healthy, cutting over traffic")
+	slog.Info("all green containers healthy, cutting over traffic", "component", "blue-green", "service", d.Service)
 
 	cutoverUpstream := buildBlueGreenCutoverUpstream(d)
-	if err := bg.provider.GenerateConfig(cutoverUpstream); err != nil {
+	if err := bg.provider.GenerateConfig(ctx, cutoverUpstream); err != nil {
 		return fmt.Errorf("generating cutover config: %w", err)
 	}
 
-	if err := bg.provider.Reload(); err != nil {
+	if err := bg.provider.Reload(ctx); err != nil {
 		return fmt.Errorf("reloading provider: %w", err)
 	}
 
@@ -73,7 +64,7 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 	}
 
 	soakTime := d.Config.BlueGreen.SoakTime
-	log.Printf("[blue-green] soaking on green for %s before removing blue", soakTime)
+	slog.Info("soaking on green before removing blue", "component", "blue-green", "service", d.Service, "soak", soakTime)
 
 	select {
 	case <-time.After(soakTime):
@@ -88,17 +79,17 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 	for _, c := range d.Old {
 		finalUpstream.Servers = append(finalUpstream.Servers, provider.Server{Addr: c.Addr, Backup: true})
 	}
-	applyNginxKeepalive(d, finalUpstream)
+	ApplyProviderSettings(d.Config, finalUpstream)
 
-	if err := bg.provider.GenerateConfig(finalUpstream); err != nil {
+	if err := bg.provider.GenerateConfig(ctx, finalUpstream); err != nil {
 		return fmt.Errorf("generating green config: %w", err)
 	}
 
-	if err := bg.provider.Reload(); err != nil {
+	if err := bg.provider.Reload(ctx); err != nil {
 		return fmt.Errorf("reloading provider: %w", err)
 	}
 
-	log.Printf("[blue-green] draining blue containers for %s", d.Config.DrainTimeout)
+	slog.Info("draining blue containers", "component", "blue-green", "service", d.Service, "timeout", d.Config.DrainTimeout)
 
 	select {
 	case <-time.After(d.Config.DrainTimeout):
@@ -110,27 +101,19 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 	for _, c := range d.New {
 		postDrainUpstream.Servers = append(postDrainUpstream.Servers, provider.Server{Addr: c.Addr})
 	}
-	applyNginxKeepalive(d, postDrainUpstream)
+	ApplyProviderSettings(d.Config, postDrainUpstream)
 
-	if err := bg.provider.GenerateConfig(postDrainUpstream); err != nil {
+	if err := bg.provider.GenerateConfig(ctx, postDrainUpstream); err != nil {
 		return fmt.Errorf("generating post-drain config: %w", err)
 	}
 
-	if err := bg.provider.Reload(); err != nil {
+	if err := bg.provider.Reload(ctx); err != nil {
 		return fmt.Errorf("reloading post-drain: %w", err)
 	}
 
-	log.Printf("[blue-green] tearing down blue containers")
+	slog.Info("tearing down blue containers", "component", "blue-green", "service", d.Service)
 
-	for _, c := range d.Old {
-		if err := bg.docker.Stop(ctx, c.ID, 10); err != nil {
-			log.Printf("[blue-green] warning: stop %s: %v", c.ID[:12], err)
-		}
-
-		if err := bg.docker.Remove(ctx, c.ID); err != nil {
-			log.Printf("[blue-green] warning: remove %s: %v", c.ID[:12], err)
-		}
-	}
+	removeContainers(ctx, "blue-green", bg.docker, d.Old)
 
 	ds.Status = state.StatusIdle
 	ds.CurrentWeight = 100
@@ -140,7 +123,7 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 		return fmt.Errorf("saving final state: %w", err)
 	}
 
-	log.Printf("[blue-green] deployment complete for %s", d.Service)
+	slog.Info("deployment complete", "component", "blue-green", "service", d.Service)
 	return nil
 }
 
@@ -162,49 +145,11 @@ func buildBlueGreenCutoverUpstream(d *Deployment) *provider.UpstreamState {
 		upstream.Servers = append(upstream.Servers, provider.Server{Addr: c.Addr, Weight: greenWeight, Group: "canary"})
 	}
 
-	applyNginxKeepalive(d, upstream)
+	ApplyProviderSettings(d.Config, upstream)
 
 	return upstream
 }
 
 func (bg *BlueGreen) Rollback(ctx context.Context, d *Deployment) error {
-	log.Printf("[blue-green] rolling back %s to blue", d.Service)
-
-	upstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName()}
-	for _, c := range d.Old {
-		upstream.Servers = append(upstream.Servers, provider.Server{Addr: c.Addr})
-	}
-	applyNginxKeepalive(d, upstream)
-
-	if err := bg.provider.GenerateConfig(upstream); err != nil {
-		return fmt.Errorf("generating rollback config: %w", err)
-	}
-
-	if err := bg.provider.Reload(); err != nil {
-		return fmt.Errorf("reloading provider: %w", err)
-	}
-
-	for _, c := range d.New {
-		if err := bg.docker.Stop(ctx, c.ID, 10); err != nil {
-			log.Printf("[blue-green] warning: stop %s: %v", c.ID[:12], err)
-		}
-
-		if err := bg.docker.Remove(ctx, c.ID); err != nil {
-			log.Printf("[blue-green] warning: remove %s: %v", c.ID[:12], err)
-		}
-	}
-
-	ds := &state.DeploymentState{
-		Service:    d.Service,
-		Status:     state.StatusIdle,
-		Strategy:   "blue-green",
-		Containers: state.Containers{Stable: containerIDs(d.Old)},
-	}
-
-	if err := bg.state.Save(ds); err != nil {
-		return fmt.Errorf("saving rollback state: %w", err)
-	}
-
-	log.Printf("[blue-green] rollback complete for %s", d.Service)
-	return nil
+	return baseRollback(ctx, "blue-green", bg.docker, bg.provider, bg.state, d)
 }

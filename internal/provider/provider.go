@@ -57,10 +57,10 @@ func supportsNginxBackup(affinity string) bool { return affinity == "" }
 func supportsAngieBackup(affinity string) bool { return affinity == "" || affinity == "cookie" }
 
 type UpstreamState struct {
-	Service         string
-	UpstreamName    string // overrides Service for upstream naming (e.g. VIRTUAL_HOST for nginx-proxy)
-	Servers         []Server
-	Affinity        string // "ip" (default), "cookie", or "" (disabled)
+	Service      string
+	UpstreamName string // overrides Service for upstream naming (e.g. VIRTUAL_HOST for nginx-proxy)
+	Servers      []Server
+	Affinity     string // "ip" (default), "cookie", or "" (disabled)
 	// cookie: nginx→ip_hash (OSS has no sticky), angie/caddy/traefik/haproxy→sticky cookie
 	// ip: nginx/angie/nginx-proxy→ip_hash, traefik→hrw, caddy→ip_hash, haproxy→source
 	Keepalive       int    // 0 disables keepalive
@@ -75,8 +75,8 @@ func (u *UpstreamState) ResolveUpstreamName() string {
 }
 
 type Provider interface {
-	GenerateConfig(state *UpstreamState) error
-	Reload() error
+	GenerateConfig(ctx context.Context, state *UpstreamState) error
+	Reload(ctx context.Context) error
 }
 
 // resolveProxyContainer finds the proxy container, trying running containers first.
