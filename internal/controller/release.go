@@ -12,25 +12,45 @@ import (
 	"github.com/docker/docker/api/types"
 )
 
-func (c *Controller) EnqueueRelease(service string, force bool) error {
-	cmd, err := c.stateManager.EnqueueReleaseCommand(service, force)
+// EnqueueRelease writes a detached release command for the given service to
+// disk so the watch daemon picks it up on the next poll tick.
+func (c *Controller) EnqueueRelease(project, service string, force bool) error {
+	project = c.effectiveProject(project)
+	cmd, err := c.managerFor(project).EnqueueReleaseCommand(service, force)
 	if err != nil {
 		return err
 	}
 
-	slog.Info("queued detached release", "component", "controller", "service", service, "command", cmd.ID)
+	slog.Info("queued detached release", "component", "controller", "service", serviceKey{project: project, service: service}.deployKey(), "command", cmd.ID)
 	return nil
 }
 
 func (c *Controller) processReleaseCommands(ctx context.Context) {
-	commands, err := c.stateManager.PendingReleaseCommands()
+	var commands []state.QueuedReleaseCommand
+	var err error
+
+	if c.project != "" {
+		// Per-project mode: only scan this project's command queue.
+		commands, err = c.stateManager.PendingReleaseCommands()
+	} else {
+		// Global mode: scan all projects' command directories.
+		commands, err = state.ScanAllPendingCommands(c.stateBaseDir)
+	}
+
 	if err != nil {
 		slog.Error("error reading release commands", "component", "controller", "err", err)
 		return
 	}
 
 	for _, cmd := range commands {
-		claimed, ok, err := c.stateManager.ClaimReleaseCommand(cmd)
+		project := cmd.Project
+		if project == "" && c.project != "" {
+			project = c.project
+		}
+
+		mgr := c.managerFor(project)
+
+		claimed, ok, err := mgr.ClaimReleaseCommand(cmd)
 		if err != nil {
 			slog.Error("error claiming release command", "component", "controller", "command", cmd.ID, "err", err)
 			continue
@@ -39,31 +59,39 @@ func (c *Controller) processReleaseCommands(ctx context.Context) {
 			continue
 		}
 
-		slog.Info("processing detached release", "component", "controller", "service", claimed.Service, "command", claimed.ID)
-		if err := c.Release(ctx, claimed.Service, claimed.Force); err != nil {
-			slog.Error("detached release failed", "component", "controller", "service", claimed.Service, "command", claimed.ID, "err", err)
+		key := serviceKey{project: project, service: claimed.Service}
+		slog.Info("processing detached release", "component", "controller", "service", key.deployKey(), "command", claimed.ID)
+		if err := c.Release(ctx, project, claimed.Service, claimed.Force); err != nil {
+			slog.Error("detached release failed", "component", "controller", "service", key.deployKey(), "command", claimed.ID, "err", err)
 		}
 
-		if err := c.stateManager.CompleteReleaseCommand(claimed); err != nil {
+		if err := mgr.CompleteReleaseCommand(claimed); err != nil {
 			slog.Error("error completing release command", "component", "controller", "command", claimed.ID, "err", err)
 		}
 	}
 }
 
-func (c *Controller) Release(ctx context.Context, service string, force bool) error {
-	ds, err := c.stateManager.Load(service)
+// Release triggers a deployment for the given project and service. project is
+// required in global mode (c.project == "") so the correct state manager and
+// container filter are used.
+func (c *Controller) Release(ctx context.Context, project, service string, force bool) error {
+	project = c.effectiveProject(project)
+	mgr := c.managerFor(project)
+	key := serviceKey{project: project, service: service}
+
+	ds, err := mgr.Load(service)
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
 
 	if ds.Status == state.StatusInProgress && !ds.IsStale(state.DefaultStaleThreshold) && !force {
-		return fmt.Errorf("deployment already in progress for %q (started %s) — use --force to override", service, formatTimestamp(ds.UpdatedAt))
+		return fmt.Errorf("deployment already in progress for %q (started %s) — use --force to override", key.deployKey(), formatTimestamp(ds.UpdatedAt))
 	}
 
-	release, err := c.stateManager.AcquireDeployLock(service)
+	release, err := mgr.AcquireDeployLock(service)
 	if err != nil {
 		if errors.Is(err, state.ErrDeployLocked) {
-			return fmt.Errorf("deployment already running for %q in another process", service)
+			return fmt.Errorf("deployment already running for %q in another process", key.deployKey())
 		}
 		return fmt.Errorf("acquiring deploy lock: %w", err)
 	}
@@ -76,15 +104,15 @@ func (c *Controller) Release(ctx context.Context, service string, force bool) er
 		}
 	}()
 
-	containers, err := c.docker.ListManagedContainers(ctx, c.project)
+	containers, err := c.docker.ListManagedContainers(ctx, project)
 	if err != nil {
 		return fmt.Errorf("listing containers: %w", err)
 	}
 
-	serviceContainers := filterServiceContainers(containers, service)
+	serviceContainers := filterServiceContainers(containers, key)
 
 	if len(serviceContainers) == 0 {
-		return fmt.Errorf("no managed containers found for service %q", service)
+		return fmt.Errorf("no managed containers found for service %q", key.deployKey())
 	}
 
 	revisions := groupByRevision(serviceContainers)
@@ -98,12 +126,12 @@ func (c *Controller) Release(ctx context.Context, service string, force bool) er
 
 		c.resolveNginxProxyUpstream(ctx, cfg, newContainers)
 
-		slog.Info("releasing", "component", "controller", "service", service, "old", len(oldContainers), "new", len(newContainers))
+		slog.Info("releasing", "component", "controller", "service", key.deployKey(), "old", len(oldContainers), "new", len(newContainers))
 		releaseOnReturn = nil
 		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
-			c.deploy(ctx, service, cfg, oldContainers, newContainers, release)
+			c.deploy(ctx, key, cfg, oldContainers, newContainers, release)
 		}()
 		return nil
 	}
@@ -115,31 +143,26 @@ func (c *Controller) Release(ctx context.Context, service string, force bool) er
 
 	c.resolveNginxProxyUpstream(ctx, cfg, serviceContainers)
 
-	newContainers, err := c.scaleUp(ctx, serviceContainers)
+	newContainers, err := c.scaleUp(ctx, key, serviceContainers)
 	if err != nil {
 		return fmt.Errorf("scaling up: %w", err)
 	}
 
-	slog.Info("releasing", "component", "controller", "service", service, "old", len(serviceContainers), "new", len(newContainers))
+	slog.Info("releasing", "component", "controller", "service", key.deployKey(), "old", len(serviceContainers), "new", len(newContainers))
 	releaseOnReturn = nil
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		c.deploy(ctx, service, cfg, serviceContainers, newContainers, release)
+		c.deploy(ctx, key, cfg, serviceContainers, newContainers, release)
 	}()
 
 	return nil
 }
 
-func (c *Controller) scaleUp(ctx context.Context, existing []types.Container) ([]types.Container, error) {
+func (c *Controller) scaleUp(ctx context.Context, key serviceKey, existing []types.Container) ([]types.Container, error) {
 	slog.Info("scaling up: creating containers from image", "component", "controller", "count", len(existing))
 
-	var project, service string
-	if len(existing) > 0 {
-		project = existing[0].Labels["com.docker.compose.project"]
-		service = existing[0].Labels["com.docker.compose.service"]
-	}
-	maxNum := c.docker.MaxServiceContainerNumber(ctx, project, service)
+	maxNum := c.docker.MaxServiceContainerNumber(ctx, key.project, key.service)
 
 	var newIDs []string
 	for i, ctr := range existing {
@@ -158,7 +181,9 @@ func (c *Controller) scaleUp(ctx context.Context, existing []types.Container) ([
 		newIDSet[id] = true
 	}
 
-	allContainers, err := c.docker.ListManagedContainers(ctx, c.project)
+	// Filter using the explicit project so global mode doesn't accidentally
+	// include same-named services from other projects.
+	allContainers, err := c.docker.ListManagedContainers(ctx, key.project)
 	if err != nil {
 		return nil, fmt.Errorf("listing containers: %w", err)
 	}

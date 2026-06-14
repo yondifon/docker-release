@@ -2,15 +2,11 @@
 
 Use this when your app runs behind Caddy.
 
-`docker-release` writes `.caddy` files to a shared volume, then reloads Caddy.
-
-## When to Use This
-
-Use this provider when Caddy is your reverse proxy and you want `docker-release` to keep upstream backends current while your Caddyfile owns routes, headers, auth, and other directives.
+`docker-release` writes named snippet files to a shared volume and reloads Caddy after each deploy. You write the `Caddyfile` and control routes, headers, and auth — `docker-release` only manages the `reverse_proxy` backend list inside a named snippet.
 
 ## What Gets Written
 
-By default, `docker-release` writes a named snippet:
+For a service named `app`, `docker-release` writes:
 
 ```caddy
 (app_upstream) {
@@ -20,28 +16,32 @@ By default, `docker-release` writes a named snippet:
 }
 ```
 
-Import the generated file globally, then use the snippet inside your site block.
+Your Caddyfile imports this snippet and uses it wherever needed.
 
 ## Compose Example
 
 ```yaml
 services:
   docker-release:
-    image: malico/docker-release:0.1
+    image: malico/docker-release:latest
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - caddy-config:/shared/caddy-config:rw # docker-release writes Caddy files here
+      - caddy-config:/shared/caddy-config:rw
+    healthcheck:
+      test: ["CMD", "dr", "healthcheck"]
+      interval: 5s
+      retries: 10
 
   caddy:
     image: caddy:alpine
     ports:
       - "80:80"
     volumes:
-      - caddy-config:/etc/caddy/conf.d:ro # Caddy reads generated files here
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro # Your base Caddy config
+      - caddy-config:/etc/caddy/conf.d:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
       docker-release:
-        condition: service_healthy # wait until docker-release has written snippet files
+        condition: service_healthy
 
   app:
     image: your-registry/app:latest
@@ -60,15 +60,10 @@ volumes:
 
 ## Caddyfile
 
-Most sites proxy the whole domain to one app. Use this first.
-
 ```caddy
 import /etc/caddy/conf.d/*.caddy
 
 example.com {
-    encode gzip zstd
-    header X-Frame-Options DENY
-
     import app_upstream
 }
 ```
@@ -82,13 +77,6 @@ release.enable: "true"
 release.provider: caddy
 ```
 
-## Optional Overrides
-
-| Label | Default | Override when |
-|---|---|---|
-| `release.caddy.service` | auto-detected by image | multiple Caddy containers in the project |
-| `release.caddy.config_dir` | `/shared/caddy-config` | shared volume mounted at a different path |
-
 ## Deploy
 
 ```sh
@@ -96,17 +84,38 @@ docker compose up -d
 docker release app
 ```
 
-## Notes
+## Optional Overrides
 
-- `docker-release` always writes a named snippet. Import it inside your Caddy site block wherever you need it.
-- Cookie affinity uses a generated cookie name like `_srr_a172cedcae`.
+| Label | Default | Override when |
+|---|---|---|
+| `release.caddy.service` | auto-detected | multiple Caddy containers in the project |
+| `release.caddy.config_dir` | `/shared/caddy-config` | volume mounted at a different path |
 
-## Strategy Examples
+## Path Routing
 
-### Linear
+Use `handle_path` to route by URL path. Caddy strips the prefix before forwarding.
+
+```caddy
+import /etc/caddy/conf.d/*.caddy
+
+example.com {
+    handle_path /app/* {
+        import app_upstream
+    }
+
+    handle_path /api/* {
+        import api_upstream
+    }
+}
+```
+
+## Strategies
+
+See [docs/readme.md#deploy-strategies](../readme.md#deploy-strategies) for full explanation.
+
+### Linear (default)
 
 ```yaml
-# No label needed. Linear is the default.
 release.drain_timeout: 10s
 release.health_check_timeout: 60s
 ```
@@ -129,55 +138,15 @@ release.bg.soak_time: 5m
 release.bg.green_weight: 50
 ```
 
-## Path Mode (Optional)
+## Notes
 
-Use `handle_path` in your Caddyfile to route by URL path. `docker-release` always writes a named snippet — you control where and how it is used.
-
-Route `/app/*` to `app` (Caddy strips the prefix before forwarding):
-
-```caddy
-handle_path /app/* {
-    import app_upstream
-}
-```
-
-Route `/api/*` to `api`:
-
-```caddy
-handle_path /api/* {
-    import api_upstream
-}
-```
-
-## Add Static Routes
-
-Keep your own routes in `Caddyfile`. Put generated snippet imports at the top level, then use the named upstream as the fallback app route.
-
-```caddy
-import /etc/caddy/conf.d/*.caddy
-
-example.com {
-    encode gzip zstd
-
-    handle /static/* {
-        root * /srv/www
-        file_server
-    }
-
-    handle /health {
-        respond 200
-    }
-
-    handle {
-        import app_upstream
-    }
-}
-```
+- Cookie affinity uses a generated cookie name like `_srr_a172cedcae`.
+- `docker-release` always writes a named snippet. You control where and how it is imported in your Caddyfile.
 
 ## Common Problems
 
 | Problem | Fix |
 |---|---|
-| Caddy does not route to the app | Check `import /etc/caddy/conf.d/*.caddy`. |
-| App receives the wrong path | Remove `release.caddy.path` for whole-site routing, or check the path value. |
-| Reload does not run | Set `release.caddy.service` to your Caddy Compose service name. |
+| Caddy does not route to the app | Check `import /etc/caddy/conf.d/*.caddy` is at the top of your Caddyfile |
+| Reload does not run | Set `release.caddy.service` to your Caddy Compose service name |
+| Rollback state lost on restart | Mount `/var/lib/docker-release` to a named volume |

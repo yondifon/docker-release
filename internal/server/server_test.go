@@ -164,7 +164,7 @@ func TestBuildServiceList(t *testing.T) {
 	}
 
 	active := map[string]string{"web": "deploy_abc"}
-	infos := buildServiceList(states, active, nil)
+	infos := buildServiceList(states, active, nil, "")
 
 	byService := make(map[string]ServiceInfo)
 	for _, i := range infos {
@@ -200,7 +200,7 @@ func TestBuildServiceListStale(t *testing.T) {
 		Status:    state.StatusInProgress,
 		UpdatedAt: time.Now().Add(-2 * time.Hour),
 	}
-	infos := buildServiceList([]*state.DeploymentState{ds}, nil, nil)
+	infos := buildServiceList([]*state.DeploymentState{ds}, nil, nil, "")
 	if len(infos) != 1 {
 		t.Fatalf("len = %d, want 1", len(infos))
 	}
@@ -356,7 +356,7 @@ func TestPendingCommandsInServiceList(t *testing.T) {
 			ID: cmd.ID, Force: cmd.Force, CreatedAt: cmd.CreatedAt,
 		})
 	}
-	infos := buildServiceList(states, nil, pendingByService)
+	infos := buildServiceList(states, nil, pendingByService, "")
 	if len(infos) != 1 {
 		t.Fatalf("len = %d, want 1", len(infos))
 	}

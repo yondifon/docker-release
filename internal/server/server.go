@@ -173,3 +173,13 @@ func envBool(key string) bool {
 	v := os.Getenv(key)
 	return v == "1" || v == "true" || v == "yes"
 }
+
+// deployKey converts a bare service name to the composite "project/service"
+// key used in the controller's deployments map. Matches the logic in
+// internal/controller/ref.go serviceKey.deployKey().
+func (s *Server) deployKey(service string) string {
+	if s.project == "" {
+		return service
+	}
+	return s.project + "/" + service
+}

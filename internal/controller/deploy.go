@@ -16,40 +16,43 @@ import (
 	"github.com/docker/docker/api/types"
 )
 
-func (c *Controller) deploy(parentCtx context.Context, serviceName string, cfg *config.ServiceConfig, oldContainers, newContainers []types.Container, releaseLock func()) {
+func (c *Controller) deploy(parentCtx context.Context, key serviceKey, cfg *config.ServiceConfig, oldContainers, newContainers []types.Container, releaseLock func()) {
+	dKey := key.deployKey()
+	mgr := c.managerFor(key.project)
+
 	c.mu.Lock()
-	if d, ok := c.deployments[serviceName]; ok {
+	if d, ok := c.deployments[dKey]; ok {
 		d.cancel()
 	}
 
 	ctx, cancel := context.WithCancel(parentCtx)
 	deployID := state.GenerateDeploymentID()
-	c.deployments[serviceName] = activeDeployment{id: deployID, cancel: cancel}
+	c.deployments[dKey] = activeDeployment{id: deployID, cancel: cancel}
 	c.mu.Unlock()
 
 	// Capture the previous deployment's ID before the early save overwrites it,
 	// and use one ID for both the tracking map and the persisted state so the
 	// API can cancel by the ID it reports.
 	prevDeployID := ""
-	if prev, err := c.stateManager.Load(serviceName); err == nil {
+	if prev, err := mgr.Load(key.service); err == nil {
 		prevDeployID = prev.ActiveDeploymentID
 	}
 
 	ds := &state.DeploymentState{
-		Service:              serviceName,
+		Service:              key.service,
 		Status:               state.StatusInProgress,
 		Strategy:             string(cfg.Strategy),
 		ActiveDeploymentID:   deployID,
 		PreviousDeploymentID: prevDeployID,
 	}
-	if err := c.stateManager.Save(ds); err != nil {
-		slog.Error("error saving early state", "component", "controller", "service", serviceName, "err", err)
+	if err := mgr.Save(ds); err != nil {
+		slog.Error("error saving early state", "component", "controller", "service", dKey, "err", err)
 	}
 
 	defer func() {
 		c.mu.Lock()
-		if d, ok := c.deployments[serviceName]; ok && d.id == deployID {
-			delete(c.deployments, serviceName)
+		if d, ok := c.deployments[dKey]; ok && d.id == deployID {
+			delete(c.deployments, dKey)
 		}
 		c.mu.Unlock()
 		cancel()
@@ -58,16 +61,16 @@ func (c *Controller) deploy(parentCtx context.Context, serviceName string, cfg *
 		}
 	}()
 
-	slog.Info("starting deployment", "component", "controller", "service", serviceName, "strategy", cfg.Strategy)
+	slog.Info("starting deployment", "component", "controller", "service", dKey, "strategy", cfg.Strategy)
 
 	expected := len(oldContainers)
 	if len(newContainers) < expected {
-		newContainers = c.waitForContainers(ctx, serviceName, containerRevision(newContainers[0]), expected)
+		newContainers = c.waitForContainers(ctx, key, containerRevision(newContainers[0]), expected)
 	}
 
 	prov, err := c.factory.Provider(cfg)
 	if err != nil {
-		slog.Error("error building provider", "component", "controller", "service", serviceName, "err", err)
+		slog.Error("error building provider", "component", "controller", "service", dKey, "err", err)
 		return
 	}
 
@@ -77,7 +80,7 @@ func (c *Controller) deploy(parentCtx context.Context, serviceName string, cfg *
 	newInfos := c.resolveContainers(ctx, newContainers, resolveAddr)
 
 	d := &strategy.Deployment{
-		Service:      serviceName,
+		Service:      key.service,
 		Config:       cfg,
 		Old:          oldInfos,
 		New:          newInfos,
@@ -93,47 +96,47 @@ func (c *Controller) deploy(parentCtx context.Context, serviceName string, cfg *
 		newIDs[i] = info.ID
 	}
 
-	strat := strategy.New(cfg, c.docker, prov, c.stateManager)
+	strat := strategy.New(cfg, c.docker, prov, mgr)
 
 	mon := monitor.NewHealthMonitor(c.docker, newIDs, func(containerID, reason string) {
-		slog.Warn("auto-rollback triggered", "component", "controller", "service", serviceName, "reason", reason)
+		slog.Warn("auto-rollback triggered", "component", "controller", "service", dKey, "reason", reason)
 		deployCancel()
 	})
 	mon.SetGracePeriod(cfg.HealthCheckTimeout)
 
 	go func() {
 		if err := mon.Run(deployCtx); err != nil && !errors.Is(err, monitor.ErrUnhealthy) && deployCtx.Err() == nil {
-			slog.Warn("health monitor stopped early; deployment proceeding unmonitored", "component", "controller", "service", serviceName, "err", err)
+			slog.Warn("health monitor stopped early; deployment proceeding unmonitored", "component", "controller", "service", dKey, "err", err)
 		}
 	}()
 
 	if err := strat.Execute(deployCtx, d); err != nil {
-		slog.Error("deployment failed", "component", "controller", "service", serviceName, "err", err)
+		slog.Error("deployment failed", "component", "controller", "service", dKey, "err", err)
 
 		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), cfg.HealthCheckTimeout+cfg.DrainTimeout+30*time.Second)
 		defer rollbackCancel()
 
-		slog.Info("initiating abort rollback", "component", "controller", "service", serviceName)
-		if rbErr := c.abortDeployment(rollbackCtx, serviceName, cfg, prov, d); rbErr != nil {
-			slog.Error("rollback failed", "component", "controller", "service", serviceName, "err", rbErr)
+		slog.Info("initiating abort rollback", "component", "controller", "service", dKey)
+		if rbErr := c.abortDeployment(rollbackCtx, key, cfg, prov, d, mgr); rbErr != nil {
+			slog.Error("rollback failed", "component", "controller", "service", dKey, "err", rbErr)
 		}
 		return
 	}
 
-	slog.Info("deployment complete", "component", "controller", "service", serviceName)
+	slog.Info("deployment complete", "component", "controller", "service", dKey)
 }
 
-func (c *Controller) abortDeployment(ctx context.Context, serviceName string, cfg *config.ServiceConfig, prov provider.Provider, d *strategy.Deployment) error {
-	targets, err := c.abortTargets(ctx, serviceName, d)
+func (c *Controller) abortDeployment(ctx context.Context, key serviceKey, cfg *config.ServiceConfig, prov provider.Provider, d *strategy.Deployment, mgr *state.Manager) error {
+	targets, err := c.abortTargets(ctx, d, mgr)
 	if err != nil {
 		return err
 	}
 	if len(targets) == 0 {
-		return fmt.Errorf("no live rollback targets for %s", serviceName)
+		return fmt.Errorf("no live rollback targets for %s", key.deployKey())
 	}
 
 	upstream := &provider.UpstreamState{
-		Service:      serviceName,
+		Service:      key.service,
 		UpstreamName: d.UpstreamName(),
 		Affinity:     cfg.Affinity,
 	}
@@ -176,15 +179,15 @@ func (c *Controller) abortDeployment(ctx context.Context, serviceName string, cf
 		}
 	}
 
-	return c.stateManager.Save(&state.DeploymentState{
-		Service:    serviceName,
+	return mgr.Save(&state.DeploymentState{
+		Service:    key.service,
 		Status:     state.StatusIdle,
 		Strategy:   string(cfg.Strategy),
 		Containers: state.Containers{Stable: containerInfoIDs(targets)},
 	})
 }
 
-func (c *Controller) abortTargets(ctx context.Context, serviceName string, d *strategy.Deployment) ([]strategy.ContainerInfo, error) {
+func (c *Controller) abortTargets(ctx context.Context, d *strategy.Deployment, mgr *state.Manager) ([]strategy.ContainerInfo, error) {
 	containersByID := make(map[string]strategy.ContainerInfo, len(d.Old)+len(d.New))
 	for _, info := range d.Old {
 		containersByID[info.ID] = info
@@ -193,7 +196,7 @@ func (c *Controller) abortTargets(ctx context.Context, serviceName string, d *st
 		containersByID[info.ID] = info
 	}
 
-	ds, err := c.stateManager.Load(serviceName)
+	ds, err := mgr.Load(d.Service)
 	if err != nil {
 		return nil, fmt.Errorf("loading abort state: %w", err)
 	}
@@ -243,39 +246,39 @@ func (c *Controller) resolveNginxProxyUpstream(ctx context.Context, cfg *config.
 	cfg.UpstreamName = name
 }
 
-func (c *Controller) waitForContainers(ctx context.Context, serviceName, revision string, expected int) []types.Container {
+func (c *Controller) waitForContainers(ctx context.Context, key serviceKey, revision string, expected int) []types.Container {
 	timeout := 30 * time.Second
 	deadline := time.After(timeout)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
-	slog.Info("waiting for new containers (have fewer)", "component", "controller", "service", serviceName, "expected", expected)
+	slog.Info("waiting for new containers (have fewer)", "component", "controller", "service", key.deployKey(), "expected", expected)
 
 	for {
 		select {
 		case <-deadline:
-			slog.Warn("timed out waiting for new containers, proceeding with what's available", "component", "controller", "service", serviceName, "expected", expected)
-			return c.listContainersByRevision(ctx, serviceName, revision)
+			slog.Warn("timed out waiting for new containers, proceeding with what's available", "component", "controller", "service", key.deployKey(), "expected", expected)
+			return c.listContainersByRevision(ctx, key, revision)
 		case <-ctx.Done():
-			return c.listContainersByRevision(ctx, serviceName, revision)
+			return c.listContainersByRevision(ctx, key, revision)
 		case <-ticker.C:
-			found := c.listContainersByRevision(ctx, serviceName, revision)
+			found := c.listContainersByRevision(ctx, key, revision)
 			if len(found) >= expected {
-				slog.Info("found new containers", "component", "controller", "service", serviceName, "found", len(found), "expected", expected)
+				slog.Info("found new containers", "component", "controller", "service", key.deployKey(), "found", len(found), "expected", expected)
 				return found
 			}
 		}
 	}
 }
 
-func (c *Controller) listContainersByRevision(ctx context.Context, serviceName, revision string) []types.Container {
-	containers, err := c.docker.ListManagedContainers(ctx, c.project)
+func (c *Controller) listContainersByRevision(ctx context.Context, key serviceKey, revision string) []types.Container {
+	containers, err := c.docker.ListManagedContainers(ctx, key.project)
 	if err != nil {
 		return nil
 	}
 
 	var matched []types.Container
-	for _, ctr := range filterServiceContainers(containers, serviceName) {
+	for _, ctr := range filterServiceContainers(containers, key) {
 		if containerRevision(ctr) == revision {
 			matched = append(matched, ctr)
 		}

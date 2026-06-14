@@ -82,7 +82,7 @@ func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	active := s.ctrl.ActiveDeployments()
-	infos := buildServiceList(states, active, s.pendingCommandsByService())
+	infos := buildServiceList(states, active, s.pendingCommandsByService(), s.project)
 	writeJSON(w, http.StatusOK, infos)
 }
 
@@ -96,7 +96,7 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	active := s.ctrl.ActiveDeployments()
-	_, inProgress := active[name]
+	_, inProgress := active[s.deployKey(name)]
 	if ds.UpdatedAt.IsZero() && !inProgress {
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
@@ -139,7 +139,7 @@ func (s *Server) handleCancelByDeployment(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleCancelByService(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("service")
-	if !s.ctrl.CancelDeployment(name) {
+	if !s.ctrl.CancelDeployment(s.deployKey(name)) {
 		http.Error(w, "no active deployment", http.StatusNotFound)
 		return
 	}
@@ -158,7 +158,7 @@ func (s *Server) findDeployment(id string) (*DeploymentStatus, error) {
 	for _, ds := range states {
 		switch id {
 		case ds.ActiveDeploymentID:
-			_, inProgress := active[ds.Service]
+			_, inProgress := active[s.deployKey(ds.Service)]
 			return &DeploymentStatus{
 				DeploymentID:  id,
 				Service:       ds.Service,
@@ -204,10 +204,15 @@ func buildServiceList(
 	states []*state.DeploymentState,
 	active map[string]string,
 	pendingByService map[string][]PendingCommand,
+	project string,
 ) []ServiceInfo {
 	out := make([]ServiceInfo, 0, len(states))
 	for _, ds := range states {
-		_, inProgress := active[ds.Service]
+		key := ds.Service
+		if project != "" {
+			key = project + "/" + ds.Service
+		}
+		_, inProgress := active[key]
 		out = append(out, toServiceInfo(ds, inProgress, pendingByService[ds.Service]))
 	}
 	return out

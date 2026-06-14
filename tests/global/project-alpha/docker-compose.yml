@@ -1,0 +1,43 @@
+name: alpha
+
+# App stack for project "alpha". Shares the test-global-web network created by
+# ../docker-compose.yml. Start the infra stack first, then bring this up.
+#
+# The service is named "app" — same as project-beta — to prove cross-project isolation.
+# docker-release (DR_ALL_PROJECTS=true) tracks them as "alpha/app" vs "beta/app".
+
+networks:
+  web:
+    external: true
+    name: test-global-web
+
+services:
+  app:
+    image: traefik/whoami
+    networks: [web]
+    environment:
+      - WHOAMI_NAME=alpha-app
+      - VIRTUAL_HOST=alpha.localhost
+      - VIRTUAL_PATH=/
+      - VIRTUAL_DEST=/
+    labels:
+      - "release.enable=true"
+      - "release.provider=nginx-proxy"
+      - "release.strategy=linear"
+      - "release.drain_timeout=5s"
+
+  canary_app:
+    image: traefik/whoami
+    networks: [web]
+    environment:
+      - WHOAMI_NAME=alpha-canary
+      - VIRTUAL_HOST=alpha.localhost
+      - VIRTUAL_PATH=/canary/
+      - VIRTUAL_DEST=/
+    labels:
+      - "release.enable=true"
+      - "release.provider=nginx-proxy"
+      - "release.strategy=canary"
+      - "release.canary.start_percentage=25"
+      - "release.canary.step=25"
+      - "release.canary.interval=10s"

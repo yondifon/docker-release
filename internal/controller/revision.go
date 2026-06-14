@@ -2,26 +2,35 @@ package controller
 
 import "github.com/docker/docker/api/types"
 
-func groupContainersByService(containers []types.Container) map[string][]types.Container {
-	services := make(map[string][]types.Container)
+func groupContainersByService(containers []types.Container) map[serviceKey][]types.Container {
+	services := make(map[serviceKey][]types.Container)
 	for _, ctr := range containers {
-		name := ctr.Labels["com.docker.compose.service"]
-		if name == "" {
+		service := ctr.Labels["com.docker.compose.service"]
+		if service == "" {
 			continue
 		}
-		services[name] = append(services[name], ctr)
+		key := serviceKey{
+			project: ctr.Labels["com.docker.compose.project"],
+			service: service,
+		}
+		services[key] = append(services[key], ctr)
 	}
 	return services
 }
 
-func filterServiceContainers(containers []types.Container, serviceName string) []types.Container {
+func filterServiceContainers(containers []types.Container, key serviceKey) []types.Container {
 	var matched []types.Container
-	for _, container := range containers {
-		if container.Labels["com.docker.compose.service"] == serviceName {
-			matched = append(matched, container)
+	for _, ctr := range containers {
+		if ctr.Labels["com.docker.compose.service"] != key.service {
+			continue
 		}
+		// When project is set, require it to match so global mode doesn't mix
+		// services with the same name across projects.
+		if key.project != "" && ctr.Labels["com.docker.compose.project"] != key.project {
+			continue
+		}
+		matched = append(matched, ctr)
 	}
-
 	return matched
 }
 

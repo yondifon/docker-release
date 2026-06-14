@@ -2,29 +2,21 @@
 
 Use this when your stack uses `nginxproxy/nginx-proxy`.
 
-`docker-release` updates the `nginx-proxy` template. `nginx-proxy` reloads from Docker events.
-
-## When to Use This
-
-Use this provider only with `nginxproxy/nginx-proxy`.
-
-Your app routing still uses `VIRTUAL_HOST`, `VIRTUAL_PATH`, and related environment variables. `docker-release` updates the template so the active container list matches the deploy state.
-
-## What Gets Written
-
-`docker-release` writes a managed `nginx.tmpl` file. `nginx-proxy` uses that template to render Nginx config.
-
-The template keeps normal `nginx-proxy` behavior for services that `docker-release` does not manage.
+`docker-release` writes a managed `nginx.tmpl` file to a shared volume. nginx-proxy reads that template and generates its Nginx config from it. Your `VIRTUAL_HOST`, `VIRTUAL_PATH`, and other routing env vars work exactly as before — `docker-release` only controls which container IPs are live in the upstream.
 
 ## Compose Example
 
 ```yaml
 services:
   docker-release:
-    image: malico/docker-release:0.1
+    image: malico/docker-release:latest
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - nginx-tmpl:/shared/nginx-tmpl:rw # docker-release writes nginx.tmpl here
+      - nginx-tmpl:/shared/nginx-tmpl:rw
+    healthcheck:
+      test: ["CMD", "dr", "healthcheck"]
+      interval: 5s
+      retries: 10
 
   nginx-proxy:
     image: nginxproxy/nginx-proxy:alpine
@@ -32,18 +24,18 @@ services:
       - "80:80"
     volumes:
       - /var/run/docker.sock:/tmp/docker.sock:ro
-      - nginx-tmpl:/app/custom:ro # nginx-proxy reads nginx.tmpl here
+      - nginx-tmpl:/app/custom:ro
     environment:
       NGINX_TMPL: /app/custom/nginx.tmpl
     depends_on:
       docker-release:
-        condition: service_healthy # wait until docker-release has written the template
+        condition: service_healthy
 
   app:
     image: your-registry/app:latest
     environment:
       VIRTUAL_HOST: app.example.com
-      VIRTUAL_PATH: /app/
+      VIRTUAL_PATH: /
       VIRTUAL_DEST: /
     labels:
       release.enable: "true"
@@ -65,28 +57,14 @@ release.enable: "true"
 release.provider: nginx-proxy
 ```
 
-## Optional Overrides
+## Environment Variables
 
-| Label | Default | Override when |
-|---|---|---|
-| `release.nginx.config_dir` | `/shared/nginx-tmpl` | shared volume mounted at a different path |
-
-## What Each Environment Variable Means
-
-| Variable | Meaning |
+| Variable | Description |
 |---|---|
-| `VIRTUAL_HOST` | Host name that nginx-proxy listens on. |
-| `VIRTUAL_PATH` | URL path for the app. Use a trailing slash, such as `/app/`. |
-| `VIRTUAL_DEST` | Path sent to the app after routing. Use `/` to strip the prefix. |
-| `VIRTUAL_PORT` | App port to proxy to when the image exposes more than one port. |
-
-## Required Environment
-
-```yaml
-VIRTUAL_HOST: app.example.com
-VIRTUAL_PATH: /app/
-VIRTUAL_DEST: /
-```
+| `VIRTUAL_HOST` | Hostname nginx-proxy listens on |
+| `VIRTUAL_PATH` | URL path prefix, e.g. `/app/` (include trailing slash) |
+| `VIRTUAL_DEST` | Path sent to your app, e.g. `/` to strip the prefix |
+| `VIRTUAL_PORT` | App port when the image exposes more than one |
 
 ## Deploy
 
@@ -95,19 +73,43 @@ docker compose up -d
 docker release app
 ```
 
-## Notes
+## Optional Override
 
-- `VIRTUAL_HOST` sets the host name.
-- `VIRTUAL_PATH` sets the path.
-- `VIRTUAL_DEST` sets the path sent to your app.
-- Nginx open source uses `ip_hash` for sticky traffic. It does not set sticky cookies.
+| Label | Default | Override when |
+|---|---|---|
+| `release.nginx_proxy.config_dir` | `/shared/nginx-tmpl` | volume mounted at a different path |
 
-## Strategy Examples
+## Multiple Apps
 
-### Linear
+Each app uses a distinct `VIRTUAL_HOST` or `VIRTUAL_PATH`. `docker-release` manages each as a separate upstream.
 
 ```yaml
-# No label needed. Linear is the default.
+app:
+  environment:
+    VIRTUAL_HOST: example.com
+    VIRTUAL_PATH: /app/
+    VIRTUAL_DEST: /
+  labels:
+    release.enable: "true"
+    release.provider: nginx-proxy
+
+api:
+  environment:
+    VIRTUAL_HOST: example.com
+    VIRTUAL_PATH: /api/
+    VIRTUAL_DEST: /
+  labels:
+    release.enable: "true"
+    release.provider: nginx-proxy
+```
+
+## Strategies
+
+See [docs/readme.md#deploy-strategies](../readme.md#deploy-strategies) for full explanation.
+
+### Linear (default)
+
+```yaml
 release.drain_timeout: 10s
 release.health_check_timeout: 60s
 ```
@@ -119,7 +121,6 @@ release.strategy: canary
 release.canary.start_percentage: 10
 release.canary.step: 20
 release.canary.interval: 2m
-release.affinity: cookie
 ```
 
 ### Blue/Green
@@ -130,43 +131,15 @@ release.bg.soak_time: 5m
 release.bg.green_weight: 50
 ```
 
-## Host Example
+## Notes
 
-```yaml
-environment:
-  VIRTUAL_HOST: app.example.com
-  VIRTUAL_PORT: 80
-```
-
-## Path Example
-
-```yaml
-environment:
-  VIRTUAL_HOST: app.example.com
-  VIRTUAL_PATH: /app/
-  VIRTUAL_DEST: /
-```
-
-`/app/users` is sent to your app as `/users`.
-
-## Multiple Apps
-
-```yaml
-app:
-  environment:
-    VIRTUAL_HOST: example.com
-    VIRTUAL_PATH: /app/
-
-api:
-  environment:
-    VIRTUAL_HOST: example.com
-    VIRTUAL_PATH: /api/
-```
+- Nginx open source does not support sticky cookies. `release.affinity: cookie` falls back to IP hashing with this provider. Use Angie, Caddy, HAProxy, or Traefik if you need real cookie-based sticky sessions.
+- nginx-proxy is the recommended provider for [global mode](../global.md). `VIRTUAL_HOST` values are already unique per hostname so no extra namespacing is needed.
 
 ## Common Problems
 
 | Problem | Fix |
 |---|---|
-| Route does not appear | Check `VIRTUAL_HOST`. |
-| Path routing fails | Include the trailing slash in `VIRTUAL_PATH`, such as `/app/`. |
-| Template is not updated | Check `release.nginx.config_dir` override matches the shared template volume mount. |
+| Route does not appear | Check `VIRTUAL_HOST` is set on the app container |
+| Path routing fails | Include the trailing slash in `VIRTUAL_PATH`, e.g. `/app/` |
+| Template not updated | Check `release.nginx_proxy.config_dir` matches the shared volume mount path |

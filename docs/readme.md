@@ -1,162 +1,119 @@
 # docker-release Docs
 
-Use `docker-release` to deploy Docker Compose services without planned downtime.
+## Concepts
 
-This page gives the short version. Provider guides hold the full setup examples.
+`docker-release` runs as a service inside your Compose stack. It connects to the Docker socket and watches for deploy commands.
 
-## What You Need
+When you run `docker release app`, it:
 
-Every setup needs three parts:
+1. Starts new containers from the current image
+2. Waits for each new container to pass its Docker health check
+3. Adds new containers to your proxy config and removes old ones
+4. Drains old containers (waits for in-flight requests to finish)
+5. Stops old containers
 
-| Part | Why it is needed |
-|---|---|
-| `docker-release` service | Watches Docker and runs deploys. |
-| Docker socket mount | Lets `docker-release` start, stop, and inspect containers. |
-| Managed app labels | Tell `docker-release` which services it can deploy. |
+It never touches traffic directly. Your proxy — nginx-proxy, Nginx, Caddy, Traefik, HAProxy, or Angie — serves all requests.
 
-Most web apps also need a proxy provider. The proxy still serves traffic. `docker-release` only writes config for it.
+## Deploy Strategies
 
-## Pick a Provider
+Three strategies control how traffic shifts from old to new containers during a deploy.
 
-| Provider | Use it when | Guide |
-|---|---|---|
-| `nginx` | You use Nginx. | [Nginx](./providers/nginx.md) |
-| `angie` | You use Angie. | [Angie](./providers/angie.md) |
-| `caddy` | You use Caddy. | [Caddy](./providers/caddy.md) |
-| `haproxy` | You use HAProxy. | [HAProxy](./providers/haproxy.md) |
-| `traefik` | You use Traefik. | [Traefik](./providers/traefik.md) |
-| `nginx-proxy` | You use `nginxproxy/nginx-proxy`. | [nginx-proxy](./providers/nginx-proxy.md) |
-| `none` | You deploy workers or jobs. | [No proxy](./providers/none.md) |
+### Linear (default)
 
-## Install CLI
+Replaces containers one at a time. Traffic shifts gradually as each pair is swapped.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/desgnspace/docker-release/main/scripts/docker-release \
-  | sudo tee ~/.docker/cli-plugins/docker-release >/dev/null \
-  && sudo chmod +x ~/.docker/cli-plugins/docker-release
-```
-
-## Commands
-
-```sh
-docker release app           # deploy app
-docker release app --force   # deploy even if one is running
-docker release status        # show all services
-docker release status app    # show one service
-docker release rollback app  # roll back app
-```
-
-If a service name is also a command, use the long form:
-
-```sh
-docker release release status
-```
-
-## Deploy Flow
-
-1. Start new containers.
-2. Wait for health checks.
-3. Add new containers to the proxy.
-4. Drain old containers.
-5. Stop old containers.
-
-## How Config Moves
-
-For file-based providers, `docker-release` and the proxy share a Docker volume.
-
-Example with Nginx:
+No label needed. Linear is the default.
 
 ```yaml
-docker-release:
-  volumes:
-    - nginx-config:/shared/nginx-config:rw # writes generated upstream files
-
-nginx:
-  volumes:
-    - nginx-config:/etc/nginx/conf.d/custom:ro # reads generated upstream files
-```
-
-The path is different for each provider. Use the provider guide for the exact mount.
-
-## Strategies
-
-### Linear
-
-Replaces containers one by one.
-
-```yaml
-# No label needed. Linear is the default.
+release.drain_timeout: 10s
+release.health_check_timeout: 60s
 ```
 
 ### Blue/Green
 
-Starts a full new set, moves traffic, then keeps the old set for rollback.
+Starts a full new set of containers before shifting any traffic. Keeps the old set running during a soak period so you can roll back instantly.
 
 ```yaml
 release.strategy: blue-green
-release.bg.soak_time: 5m
-release.bg.green_weight: 50
+release.bg.soak_time: 5m       # how long to keep old containers alive after traffic shifts
+release.bg.green_weight: 50    # traffic weight on new containers during soak (0-100)
 ```
 
 ### Canary
 
-Sends some traffic to the new version, then sends more over time.
+Sends a small percentage of traffic to new containers, then increases it in steps until the new version takes all traffic.
 
 ```yaml
 release.strategy: canary
-release.canary.start_percentage: 10
-release.canary.step: 20
-release.canary.interval: 2m
+release.canary.start_percentage: 10   # initial traffic weight on new containers
+release.canary.step: 20               # weight added each interval
+release.canary.interval: 2m           # time between weight increases
 ```
 
-## Common Labels
-
-| Label | Default | Use |
-|---|---|---|
-| `release.enable` | — | Set to `true` to manage this service. |
-| `release.provider` | `nginx-proxy` | Proxy provider. |
-| `release.strategy` | `linear` | Deploy style. |
-| `release.health_check_timeout` | `60s` | Max wait for a healthy container. |
-| `release.drain_timeout` | `10s` | Wait time before old containers stop. |
-| `release.upstream` | service name | Custom upstream name. |
-| `release.affinity` | `ip` | Session affinity: `ip`, `cookie`, or empty. |
+For provider-specific strategy examples, see each [provider guide](./providers/).
 
 ## Session Affinity
 
-`release.affinity` controls how requests are pinned to a backend during a deployment. This keeps users on the same container while old and new versions run side by side.
+Controls how requests are pinned to a backend while old and new containers run side by side.
 
 | Value | Behavior |
 |---|---|
-| `ip` (default) | Routes by client IP. All providers support this. |
-| `cookie` | Routes by sticky cookie. **Not supported by Nginx or nginx-proxy** — both fall back to IP hashing. Use `cookie` only with Angie, Caddy, HAProxy, or Traefik. |
+| `ip` (default) | Routes by client IP. Supported by all providers. |
+| `cookie` | Routes by sticky cookie. Not supported by Nginx or nginx-proxy — both fall back to IP hashing. Use with Angie, Caddy, HAProxy, or Traefik. |
 | `""` (empty) | No affinity. Requests are load-balanced freely. |
 
-**Nginx and nginx-proxy note:** Nginx OSS has no sticky cookie module. Setting `release.affinity: cookie` has no extra effect — both `ip` and `cookie` produce `ip_hash` in the generated upstream block. If you need real cookie-based sticky sessions, use Angie, Caddy, HAProxy, or Traefik.
+```yaml
+release.affinity: ip      # default
+release.affinity: cookie  # sticky sessions (Angie, Caddy, HAProxy, Traefik only)
+```
 
-## Provider Labels
+## Labels Reference
 
-All provider labels are optional. Defaults work for standard single-proxy setups.
+### Required
 
-| Label | Default | Use |
+| Label | Value |
+|---|---|
+| `release.enable` | `"true"` — marks this service for management |
+| `release.provider` | `nginx-proxy`, `nginx`, `caddy`, `traefik`, `angie`, `haproxy`, or `none` |
+
+### Common
+
+| Label | Default | Description |
 |---|---|---|
-| `release.nginx.service` | auto-detected by image | Nginx Compose service name. |
-| `release.nginx.config_dir` | `/shared/nginx-config` | Shared Nginx config path. |
-| `release.angie.service` | auto-detected by image | Angie Compose service name. |
-| `release.angie.config_dir` | `/shared/angie-config` | Shared Angie config path. |
-| `release.caddy.service` | auto-detected by image | Caddy Compose service name. |
-| `release.caddy.config_dir` | `/shared/caddy-config` | Shared Caddy config path. |
-| `release.caddy.path` | empty | Optional path mode for Caddy, such as `/app`. Leave empty for a whole site. |
-| `release.haproxy.service` | auto-detected by image | HAProxy Compose service name. |
-| `release.haproxy.config_dir` | `/shared/haproxy-config` | Shared HAProxy config path. |
-| `release.traefik.config_dir` | `/shared/traefik-config` | Shared Traefik config path. |
+| `release.strategy` | `linear` | Deploy strategy: `linear`, `blue-green`, or `canary` |
+| `release.health_check_timeout` | `60s` | Max time to wait for a new container to become healthy |
+| `release.drain_timeout` | `10s` | Time to wait for in-flight requests before stopping old containers |
+| `release.affinity` | `ip` | Session affinity: `ip`, `cookie`, or empty |
+| `release.upstream` | service name | Override the upstream name used in proxy config |
+
+### Strategy Labels
+
+| Label | Default | Description |
+|---|---|---|
+| `release.bg.soak_time` | `5m` | Blue/green: how long to keep old containers alive after traffic shifts |
+| `release.bg.green_weight` | `50` | Blue/green: traffic weight on new containers during soak |
+| `release.canary.start_percentage` | `10` | Canary: initial traffic weight on new containers |
+| `release.canary.step` | `20` | Canary: weight added each interval |
+| `release.canary.interval` | `2m` | Canary: time between weight increases |
+
+### Provider Labels
+
+| Label | Default | Description |
+|---|---|---|
+| `release.nginx.service` | auto-detected | Compose service name of Nginx in this stack |
+| `release.nginx.config_dir` | `/shared/nginx-config` | Shared volume path for Nginx upstream files |
+| `release.angie.service` | auto-detected | Compose service name of Angie |
+| `release.angie.config_dir` | `/shared/angie-config` | Shared volume path for Angie upstream files |
+| `release.caddy.service` | auto-detected | Compose service name of Caddy |
+| `release.caddy.config_dir` | `/shared/caddy-config` | Shared volume path for Caddy snippet files |
+| `release.haproxy.service` | auto-detected | Compose service name of HAProxy |
+| `release.haproxy.config_dir` | `/shared/haproxy-config` | Shared volume path for HAProxy backend files |
+| `release.traefik.config_dir` | `/shared/traefik-config` | Shared volume path for Traefik dynamic config files |
+| `release.nginx_proxy.config_dir` | `/shared/nginx-tmpl` | Shared volume path for the nginx-proxy template |
 
 ## Health Checks
 
-Add a Docker `healthcheck` to each app service. `docker-release` waits for `healthy` before it sends traffic to a new container.
-
-If a service has no health check, Docker may not report a useful `healthy` state. Add a small endpoint or command that proves the app can serve work.
-
-Example:
+Every managed service needs a Docker health check. `docker-release` waits for `healthy` before it sends traffic to a new container. Without a health check, Docker never reports `healthy` and the deploy stalls.
 
 ```yaml
 healthcheck:
@@ -166,11 +123,11 @@ healthcheck:
   retries: 3
 ```
 
-## Optional Rollback State
+Use any check that proves the container can serve work — a health endpoint, a TCP check, or a CLI command.
 
-Basic examples do not need this volume.
+## Rollback State
 
-Add it if you want rollback state to survive when the `docker-release` container restarts.
+By default, rollback state lives inside the `docker-release` container and is lost if it restarts. Mount a volume to persist it:
 
 ```yaml
 services:
@@ -182,15 +139,22 @@ volumes:
   docker-release-state:
 ```
 
-## Safe Defaults
+## Global Mode
 
-| Setting | Default | Why it is safe |
-|---|---|---|
-| Strategy | `linear` | Replaces one container at a time. |
-| Affinity | `ip` | Keeps users on one backend during a deployment. |
-| Drain timeout | `10s` | Gives old requests time to finish. |
-| Health timeout | `60s` | Gives new containers time to become ready. |
+Run one `docker-release` instance as shared infra for all projects on a server.
 
-## Next Step
+→ [docs/global.md](./global.md)
 
-Open the provider guide for your proxy and copy the full example.
+## Provider Guides
+
+Each guide is self-contained. Open the one for your proxy and follow it end to end.
+
+| Proxy | Guide |
+|---|---|
+| nginx-proxy | [providers/nginx-proxy.md](./providers/nginx-proxy.md) |
+| Nginx | [providers/nginx.md](./providers/nginx.md) |
+| Caddy | [providers/caddy.md](./providers/caddy.md) |
+| Traefik | [providers/traefik.md](./providers/traefik.md) |
+| Angie | [providers/angie.md](./providers/angie.md) |
+| HAProxy | [providers/haproxy.md](./providers/haproxy.md) |
+| No proxy | [providers/none.md](./providers/none.md) |

@@ -1,18 +1,12 @@
 # Nginx Provider
 
-Use this when your app runs behind Nginx.
+Use this when you run Nginx and control its config.
 
-`docker-release` writes upstream files to a shared volume, then reloads Nginx.
-
-## When to Use This
-
-Use this provider when you control the Nginx config and can add one `include` line.
-
-Do not use this provider if another tool owns all Nginx config. Use `nginx-proxy` if you use `nginxproxy/nginx-proxy`.
+`docker-release` writes upstream files to a shared volume and reloads Nginx after each deploy. You write the `server` block and `location` rules — `docker-release` only manages the `upstream` blocks.
 
 ## What Gets Written
 
-For an app named `app`, `docker-release` writes a file like this:
+For a service named `app`, `docker-release` writes:
 
 ```nginx
 upstream app_upstream {
@@ -22,28 +16,32 @@ upstream app_upstream {
 }
 ```
 
-Your Nginx config chooses where that upstream is used.
+Your Nginx config references `app_upstream` wherever you need it.
 
 ## Compose Example
 
 ```yaml
 services:
   docker-release:
-    image: malico/docker-release:0.1
+    image: malico/docker-release:latest
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - nginx-config:/shared/nginx-config:rw # docker-release writes Nginx upstream files here
+      - nginx-config:/shared/nginx-config:rw
+    healthcheck:
+      test: ["CMD", "dr", "healthcheck"]
+      interval: 5s
+      retries: 10
 
   nginx:
     image: nginx:alpine
     ports:
       - "80:80"
     volumes:
-      - nginx-config:/etc/nginx/conf.d/custom:ro # Nginx reads generated upstream files here
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro # Your base Nginx routes
+      - nginx-config:/etc/nginx/conf.d/custom:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       docker-release:
-        condition: service_healthy # wait until docker-release has written upstream files
+        condition: service_healthy
 
   app:
     image: your-registry/app:latest
@@ -86,13 +84,6 @@ release.enable: "true"
 release.provider: nginx
 ```
 
-## Optional Overrides
-
-| Label | Default | Override when |
-|---|---|---|
-| `release.nginx.service` | auto-detected by image | multiple Nginx containers in the project |
-| `release.nginx.config_dir` | `/shared/nginx-config` | shared volume mounted at a different path |
-
 ## Deploy
 
 ```sh
@@ -100,43 +91,14 @@ docker compose up -d
 docker release app
 ```
 
-## Notes
+## Optional Overrides
 
-- `release.nginx.service` is the Compose service name for Nginx.
-- If you do not set it, `docker-release` tries to find a running Nginx container in the same Compose project.
-- Nginx open source uses `ip_hash` for sticky traffic. It does not set sticky cookies.
-
-## Strategy Examples
-
-### Linear
-
-```yaml
-# No label needed. Linear is the default.
-release.drain_timeout: 10s
-release.health_check_timeout: 60s
-```
-
-### Canary
-
-```yaml
-release.strategy: canary
-release.canary.start_percentage: 10
-release.canary.step: 20
-release.canary.interval: 2m
-release.affinity: cookie
-```
-
-### Blue/Green
-
-```yaml
-release.strategy: blue-green
-release.bg.soak_time: 5m
-release.bg.green_weight: 50
-```
+| Label | Default | Override when |
+|---|---|---|
+| `release.nginx.service` | auto-detected | multiple Nginx containers in the project |
+| `release.nginx.config_dir` | `/shared/nginx-config` | volume mounted at a different path |
 
 ## Multiple Apps
-
-Add one `location` per app. Each app gets its own upstream name.
 
 ```nginx
 include /etc/nginx/conf.d/custom/*.conf;
@@ -154,17 +116,45 @@ server {
 }
 ```
 
-`api` labels:
+Add `release.enable: "true"` and `release.provider: nginx` to each app service.
+
+## Strategies
+
+See [docs/readme.md#deploy-strategies](../readme.md#deploy-strategies) for full explanation.
+
+### Linear (default)
 
 ```yaml
-release.enable: "true"
-release.provider: nginx
+release.drain_timeout: 10s
+release.health_check_timeout: 60s
 ```
+
+### Canary
+
+```yaml
+release.strategy: canary
+release.canary.start_percentage: 10
+release.canary.step: 20
+release.canary.interval: 2m
+```
+
+### Blue/Green
+
+```yaml
+release.strategy: blue-green
+release.bg.soak_time: 5m
+release.bg.green_weight: 50
+```
+
+## Notes
+
+- Nginx open source does not support sticky cookies. `release.affinity: cookie` falls back to IP hashing. Use Angie if you need real cookie sticky sessions with an Nginx-compatible config format.
+- If `release.nginx.service` is not set, `docker-release` auto-detects the Nginx container in the same Compose project by image name.
 
 ## Common Problems
 
 | Problem | Fix |
 |---|---|
-| Nginx does not see new servers | Check `include /etc/nginx/conf.d/custom/*.conf;`. |
-| Reload does not run | Set `release.nginx.service` to your Nginx Compose service name. |
-| Rollback state is lost | Mount `/var/lib/docker-release` to a volume. |
+| Nginx ignores upstream files | Check `include /etc/nginx/conf.d/custom/*.conf;` is in your config |
+| Reload does not run | Set `release.nginx.service` to your Nginx Compose service name |
+| Rollback state lost on restart | Mount `/var/lib/docker-release` to a named volume |

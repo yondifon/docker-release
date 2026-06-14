@@ -1,44 +1,41 @@
 # No Proxy Provider
 
-Use this for workers, jobs, and services that do not receive web traffic.
+Use this for workers, jobs, and any service that does not receive web traffic.
 
-`docker-release` replaces containers and waits for health checks. It does not write proxy config.
+`docker-release` starts new containers, waits for health checks, then stops old ones. It writes no proxy config.
 
 ## When to Use This
 
-Use this provider for services that do work in the background and do not receive web traffic.
+- Background workers
+- Queue consumers
+- Scheduled jobs
+- Sidecars
 
-Good examples:
-
-- queue workers
-- schedulers
-- cron jobs
-- sidecars
-
-Do not use this provider for web apps that need canary or blue/green traffic splitting.
+Do not use this for services that need canary or blue/green traffic splitting — those strategies require a proxy.
 
 ## Compose Example
 
 ```yaml
 services:
   docker-release:
-    image: malico/docker-release:0.1
+    image: malico/docker-release:latest
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "dr", "healthcheck"]
+      interval: 5s
+      retries: 10
 
   worker:
     image: your-registry/worker:latest
     labels:
       release.enable: "true"
       release.provider: none
-      release.health_check_timeout: 60s
-      release.drain_timeout: 5s
     healthcheck:
       test: ["CMD", "my-worker", "--health"]
       interval: 10s
       timeout: 5s
       retries: 3
-
 ```
 
 ## Required Labels
@@ -48,13 +45,6 @@ release.enable: "true"
 release.provider: none
 ```
 
-## What Each Label Means
-
-| Label | Meaning |
-|---|---|
-| `release.enable` | Allows `docker-release` to manage this service. |
-| `release.provider` | Set to `none` so no proxy config is written. |
-
 ## Deploy
 
 ```sh
@@ -62,21 +52,18 @@ docker compose up -d
 docker release worker
 ```
 
-## Notes
+## Strategy
 
-- Use only `linear` with this provider.
-- `canary` and `blue-green` need a proxy because they split traffic.
-
-## Linear Example
+Only `linear` is supported. `canary` and `blue-green` require a proxy to split traffic.
 
 ```yaml
-release.enable: "true"
-release.provider: none
-release.health_check_timeout: 60s
 release.drain_timeout: 5s
+release.health_check_timeout: 60s
 ```
 
-## Worker Health Check Example
+## Health Check
+
+Every worker needs a health check. `docker-release` waits for `healthy` before it stops old containers.
 
 ```yaml
 healthcheck:
@@ -85,6 +72,8 @@ healthcheck:
   timeout: 5s
   retries: 3
 ```
+
+Use whatever check proves the worker is ready — a flag, a file, a TCP connection to an internal port.
 
 ## Cron Job Example
 
@@ -95,12 +84,17 @@ services:
     labels:
       release.enable: "true"
       release.provider: none
+    healthcheck:
+      test: ["CMD", "job", "--ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 ```
 
 ## Common Problems
 
 | Problem | Fix |
 |---|---|
-| Canary is rejected | Use a proxy provider, or switch to `linear`. |
-| Rollback state is lost | Mount `/var/lib/docker-release` to a volume. |
-| Deploy waits too long | Check the service health check. |
+| Canary or blue-green rejected | Switch to `linear`, or use a proxy provider |
+| Deploy waits forever | Check the health check — `docker-release` waits until `healthy` |
+| Rollback state lost on restart | Mount `/var/lib/docker-release` to a named volume |

@@ -200,6 +200,11 @@ func (m *Manager) ListAll() ([]*DeploymentState, error) {
 	return result, nil
 }
 
+// Dir returns the base directory used for state files.
+func (m *Manager) Dir() string {
+	return m.dir
+}
+
 func (m *Manager) path(service string) string {
 	name := service
 	if m.project != "" {

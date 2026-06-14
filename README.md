@@ -1,76 +1,73 @@
 # docker-release
 
-Deploy Docker Compose services with no planned downtime.
+Zero-downtime deploys for Docker Compose. Starts new containers, waits for health checks, updates your proxy, stops old containers.
 
-`docker-release` runs as a small controller in your Compose stack. It starts new containers, waits for health checks, updates your proxy, then stops old containers.
+## How It Works
 
-It does not handle traffic. Your proxy still handles traffic.
+1. You push a new image and run `docker release <service>`
+2. `docker-release` starts new containers and waits for them to pass health checks
+3. It updates your proxy config and drains the old containers
 
-## Start Here
+Your proxy still serves all traffic. `docker-release` only manages the container lifecycle and proxy config.
 
-Pick your proxy:
+## Pick Your Proxy
 
 | Proxy | Guide |
 |---|---|
-| Nginx | [docs/providers/nginx.md](docs/providers/nginx.md) |
-| Angie | [docs/providers/angie.md](docs/providers/angie.md) |
-| Caddy | [docs/providers/caddy.md](docs/providers/caddy.md) |
-| HAProxy | [docs/providers/haproxy.md](docs/providers/haproxy.md) |
-| Traefik | [docs/providers/traefik.md](docs/providers/traefik.md) |
 | nginx-proxy | [docs/providers/nginx-proxy.md](docs/providers/nginx-proxy.md) |
-| No proxy | [docs/providers/none.md](docs/providers/none.md) |
+| Nginx | [docs/providers/nginx.md](docs/providers/nginx.md) |
+| Caddy | [docs/providers/caddy.md](docs/providers/caddy.md) |
+| Traefik | [docs/providers/traefik.md](docs/providers/traefik.md) |
+| Angie | [docs/providers/angie.md](docs/providers/angie.md) |
+| HAProxy | [docs/providers/haproxy.md](docs/providers/haproxy.md) |
+| No proxy (workers) | [docs/providers/none.md](docs/providers/none.md) |
 
-## Quick Example
-
-This is the smallest Nginx example.
+## Quick Start
 
 ```yaml
 services:
   docker-release:
-    image: malico/docker-release:0.1
+    image: malico/docker-release:latest
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - nginx-config:/shared/nginx-config:rw # docker-release writes Nginx upstream files here
+      - nginx-tmpl:/shared/nginx-tmpl:rw
+    healthcheck:
+      test: ["CMD", "dr", "healthcheck"]
+      interval: 5s
+      retries: 10
 
-  nginx:
-    image: nginx:alpine
+  nginx-proxy:
+    image: nginxproxy/nginx-proxy:alpine
     ports:
       - "80:80"
     volumes:
-      - nginx-config:/etc/nginx/conf.d/custom:ro # Nginx reads generated upstream files here
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro # Your base Nginx routes
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - nginx-tmpl:/app/custom:ro
+    environment:
+      NGINX_TMPL: /app/custom/nginx.tmpl
     depends_on:
       docker-release:
-        condition: service_healthy # wait until upstream files are written
+        condition: service_healthy
 
   app:
     image: your-registry/app:latest
+    environment:
+      VIRTUAL_HOST: app.example.com
     labels:
       release.enable: "true"
-      release.provider: nginx
-      release.nginx.service: nginx
+      release.provider: nginx-proxy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/health"]
       interval: 10s
-      timeout: 5s
       retries: 3
 
 volumes:
-  nginx-config:
+  nginx-tmpl:
 ```
 
-`nginx.conf`:
-
-```nginx
-include /etc/nginx/conf.d/custom/*.conf;
-
-server {
-    listen 80;
-
-    location / {
-        proxy_pass http://app_upstream/;
-    }
-}
+```sh
+docker compose up -d
+docker release app
 ```
 
 ## Install CLI
@@ -81,35 +78,22 @@ curl -fsSL https://raw.githubusercontent.com/yondifon/docker-release/main/script
   && sudo chmod +x ~/.docker/cli-plugins/docker-release
 ```
 
-## Deploy
-
-```sh
-docker compose up -d
-docker release app
-```
-
 ## Commands
 
 ```sh
-docker release app           # deploy app
-docker release app --force   # deploy even if one is running
-docker release status        # show all services
-docker release status app    # show one service
-docker release rollback app  # roll back app
+docker release app                     # deploy
+docker release app --force             # deploy even if one is already running
+docker release rollback app            # roll back (note: rollback comes before the service name)
+docker release status                  # show all services
+docker release status app              # show one service
 ```
 
-## More Docs
+## Global Mode
 
-- [Main docs](docs/readme.md)
-- [Nginx guide](docs/providers/nginx.md)
-- [Caddy guide](docs/providers/caddy.md)
-- [Traefik guide](docs/providers/traefik.md)
-- [HAProxy guide](docs/providers/haproxy.md)
+Run one `docker-release` instance as shared infra across all projects on a server — no need to add it to every app stack.
 
-## Local Development
+→ [docs/global.md](docs/global.md)
 
-```sh
-make dev         # install local CLI plugin
-make dev-remove  # remove local CLI plugin
-make test        # run Go tests
-```
+## Full Docs
+
+→ [docs/readme.md](docs/readme.md)

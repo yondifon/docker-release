@@ -12,6 +12,7 @@ import (
 
 type ReleaseCommand struct {
 	ID        string    `json:"id"`
+	Project   string    `json:"project,omitempty"`
 	Service   string    `json:"service"`
 	Force     bool      `json:"force"`
 	CreatedAt time.Time `json:"created_at"`
@@ -25,6 +26,7 @@ type QueuedReleaseCommand struct {
 func (m *Manager) EnqueueReleaseCommand(service string, force bool) (*ReleaseCommand, error) {
 	cmd := &ReleaseCommand{
 		ID:        GenerateDeploymentID(),
+		Project:   m.project,
 		Service:   service,
 		Force:     force,
 		CreatedAt: time.Now(),
@@ -117,4 +119,59 @@ func (m *Manager) commandsDir() string {
 		name = m.project + "_commands"
 	}
 	return filepath.Join(m.dir, name)
+}
+
+// ScanAllPendingCommands scans every project command directory under baseDir
+// (`<project>_commands/`) and returns all pending (unclaimed) commands across
+// all projects. The Project field on each command is populated from the JSON
+// when present, falling back to the directory name.
+//
+// This is used by the global-mode controller to poll commands from all
+// projects with a single call instead of iterating known managers.
+func ScanAllPendingCommands(baseDir string) ([]QueuedReleaseCommand, error) {
+	entries, err := os.ReadDir(baseDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading state dir: %w", err)
+	}
+
+	var all []QueuedReleaseCommand
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasSuffix(entry.Name(), "_commands") {
+			continue
+		}
+		dirProject := strings.TrimSuffix(entry.Name(), "_commands")
+
+		cmdDir := filepath.Join(baseDir, entry.Name())
+		files, err := os.ReadDir(cmdDir)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
+				continue
+			}
+			path := filepath.Join(cmdDir, f.Name())
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			var cmd ReleaseCommand
+			if err := json.Unmarshal(data, &cmd); err != nil {
+				continue
+			}
+			if cmd.Project == "" {
+				cmd.Project = dirProject
+			}
+			all = append(all, QueuedReleaseCommand{ReleaseCommand: cmd, path: path})
+		}
+	}
+
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].CreatedAt.Before(all[j].CreatedAt)
+	})
+
+	return all, nil
 }

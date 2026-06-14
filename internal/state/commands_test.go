@@ -1,6 +1,8 @@
 package state
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestReleaseCommandQueue(t *testing.T) {
 	m := NewManager(t.TempDir(), "demo")
@@ -54,5 +56,68 @@ func TestPendingReleaseCommandsMissingDir(t *testing.T) {
 	}
 	if len(pending) != 0 {
 		t.Fatalf("pending count = %d, want 0", len(pending))
+	}
+}
+
+// TestReleaseCommandIncludesProject verifies that the Project field is
+// populated when a command is enqueued via a project-scoped manager.
+func TestReleaseCommandIncludesProject(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(dir, "myproject")
+
+	cmd, err := m.EnqueueReleaseCommand("app", false)
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if cmd.Project != "myproject" {
+		t.Errorf("Project = %q, want myproject", cmd.Project)
+	}
+}
+
+// TestScanAllPendingCommandsCrossProject verifies that ScanAllPendingCommands
+// returns commands from all projects and correctly sets Project.
+func TestScanAllPendingCommandsCrossProject(t *testing.T) {
+	dir := t.TempDir()
+
+	fooMgr := NewManager(dir, "foo")
+	barMgr := NewManager(dir, "bar")
+
+	if _, err := fooMgr.EnqueueReleaseCommand("app", false); err != nil {
+		t.Fatalf("enqueue foo: %v", err)
+	}
+	if _, err := barMgr.EnqueueReleaseCommand("app", true); err != nil {
+		t.Fatalf("enqueue bar: %v", err)
+	}
+
+	all, err := ScanAllPendingCommands(dir)
+	if err != nil {
+		t.Fatalf("ScanAllPendingCommands: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("len = %d, want 2", len(all))
+	}
+
+	byProject := make(map[string]QueuedReleaseCommand)
+	for _, cmd := range all {
+		byProject[cmd.Project] = cmd
+	}
+
+	if byProject["foo"].Service != "app" || byProject["foo"].Force {
+		t.Errorf("foo command = %+v", byProject["foo"].ReleaseCommand)
+	}
+	if byProject["bar"].Service != "app" || !byProject["bar"].Force {
+		t.Errorf("bar command = %+v", byProject["bar"].ReleaseCommand)
+	}
+}
+
+// TestScanAllPendingCommandsEmptyDir verifies no error and empty slice when
+// the base dir doesn't exist.
+func TestScanAllPendingCommandsEmptyDir(t *testing.T) {
+	all, err := ScanAllPendingCommands("/nonexistent/path")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(all) != 0 {
+		t.Errorf("len = %d, want 0", len(all))
 	}
 }

@@ -16,7 +16,7 @@ import (
 	"github.com/docker/docker/api/types"
 )
 
-func (c *Controller) generateInitialConfigs(ctx context.Context, services map[string][]types.Container) {
+func (c *Controller) generateInitialConfigs(ctx context.Context, services map[serviceKey][]types.Container) {
 	c.syncServicesConfigs(ctx, services, false, false)
 }
 
@@ -24,29 +24,33 @@ func (c *Controller) generateInitialConfigs(ctx context.Context, services map[st
 // and reloads provider config for each active service. checkHealth marks
 // servers that fail their health check as down. skipDeploying skips services
 // that already have a deployment in progress.
-func (c *Controller) syncServicesConfigs(ctx context.Context, services map[string][]types.Container, checkHealth, skipDeploying bool) {
+func (c *Controller) syncServicesConfigs(ctx context.Context, services map[serviceKey][]types.Container, checkHealth, skipDeploying bool) {
 	activeConfigs := make(map[string]*config.ServiceConfig)
 
-	for name, containers := range services {
+	for key, containers := range services {
 		if len(containers) == 0 {
 			continue
 		}
 		cfg, err := config.ParseLabels(containers[0].Labels)
 		if err != nil {
-			slog.Warn("skipping service config", "component", "controller", "service", name, "err", err)
+			slog.Warn("skipping service config", "component", "controller", "service", key.deployKey(), "err", err)
 			continue
 		}
 		c.resolveNginxProxyUpstream(ctx, cfg, containers)
-		activeConfigs[name] = cfg
+		activeConfigs[key.deployKey()] = cfg
 	}
 
 	c.cleanStaleConfigs(activeConfigs)
 
-	for name, cfg := range activeConfigs {
-		if skipDeploying && c.shouldSkipRefresh(name) {
+	for key, containers := range services {
+		cfg, ok := activeConfigs[key.deployKey()]
+		if !ok {
 			continue
 		}
-		c.generateServiceConfig(ctx, name, cfg, services[name], checkHealth)
+		if skipDeploying && c.shouldSkipRefresh(key) {
+			continue
+		}
+		c.generateServiceConfig(ctx, key, cfg, containers, checkHealth)
 	}
 }
 
@@ -61,6 +65,11 @@ func (c *Controller) cleanStaleConfigs(activeConfigs map[string]*config.ServiceC
 	for name, cfg := range activeConfigs {
 		ext, perService := provider.ConfigExt(cfg.Provider)
 		if !perService {
+			continue
+		}
+		if c.project == "" && !supportedInGlobalMode(cfg.Provider) {
+			// Global mode does not manage per-service-file providers (see
+			// generateServiceConfig), so never treat their files as stale.
 			continue
 		}
 		dir := cfg.ConfigDir()
@@ -107,17 +116,34 @@ func (c *Controller) cleanStaleConfigs(activeConfigs map[string]*config.ServiceC
 	}
 }
 
-func (c *Controller) generateServiceConfig(ctx context.Context, name string, cfg *config.ServiceConfig, containers []types.Container, checkHealth bool) {
-	prov, err := c.factory.Provider(cfg)
-	if err != nil {
-		slog.Error("error building provider", "component", "controller", "service", name, "err", err)
+// supportedInGlobalMode reports whether a provider is safe to manage when one
+// controller serves every Compose project. Per-service-file providers are not:
+// each derives its config filename and upstream name from the bare service
+// name, so two projects with the same service name would collide on disk and in
+// the generated config. Only nginx-proxy (routes by VIRTUAL_HOST) and none
+// (writes nothing) are project-safe.
+func supportedInGlobalMode(p config.ProviderType) bool {
+	_, perService := provider.ConfigExt(p)
+	return !perService
+}
+
+func (c *Controller) generateServiceConfig(ctx context.Context, key serviceKey, cfg *config.ServiceConfig, containers []types.Container, checkHealth bool) {
+	if c.project == "" && !supportedInGlobalMode(cfg.Provider) {
+		slog.Error("provider not supported in global mode; skipping config (use nginx-proxy)",
+			"component", "controller", "service", key.deployKey(), "provider", cfg.Provider)
 		return
 	}
 
-	upstream, ok := c.deploymentStateUpstream(ctx, name, cfg, containers)
+	prov, err := c.factory.Provider(cfg)
+	if err != nil {
+		slog.Error("error building provider", "component", "controller", "service", key.deployKey(), "err", err)
+		return
+	}
+
+	upstream, ok := c.deploymentStateUpstream(ctx, key, cfg, containers)
 	if !ok {
 		upstream = &provider.UpstreamState{
-			Service:      name,
+			Service:      key.service,
 			UpstreamName: cfg.UpstreamName,
 		}
 	}
@@ -155,13 +181,13 @@ func (c *Controller) generateServiceConfig(ctx context.Context, name string, cfg
 	defer opCancel()
 
 	if err := prov.GenerateConfig(opCtx, upstream); err != nil {
-		slog.Error("error generating config", "component", "controller", "service", name, "err", err)
+		slog.Error("error generating config", "component", "controller", "service", key.deployKey(), "err", err)
 		return
 	}
 
 	if err := prov.Reload(opCtx); err != nil {
-		slog.Error("error reloading provider", "component", "controller", "service", name, "err", err)
-		c.refreshServiceConfigAfter(ctx, name, 5*time.Second)
+		slog.Error("error reloading provider", "component", "controller", "service", key.deployKey(), "err", err)
+		c.refreshServiceConfigAfter(ctx, key, 5*time.Second)
 		return
 	}
 
@@ -172,11 +198,11 @@ func (c *Controller) generateServiceConfig(ctx context.Context, name string, cfg
 		}
 	}
 
-	slog.Info("generated config for service", "component", "controller", "service", name, "servers", len(upstream.Servers), "active", activeCount)
+	slog.Info("generated config for service", "component", "controller", "service", key.deployKey(), "servers", len(upstream.Servers), "active", activeCount)
 }
 
-func (c *Controller) deploymentStateUpstream(ctx context.Context, name string, cfg *config.ServiceConfig, containers []types.Container) (*provider.UpstreamState, bool) {
-	ds, err := c.stateManager.Load(name)
+func (c *Controller) deploymentStateUpstream(ctx context.Context, key serviceKey, cfg *config.ServiceConfig, containers []types.Container) (*provider.UpstreamState, bool) {
+	ds, err := c.managerFor(key.project).Load(key.service)
 	if err != nil || ds.Status != state.StatusInProgress || len(ds.Containers.Stable) == 0 || len(ds.Containers.Canary) == 0 {
 		return nil, false
 	}
@@ -203,7 +229,7 @@ func (c *Controller) deploymentStateUpstream(ctx context.Context, name string, c
 	}
 
 	upstream := &provider.UpstreamState{
-		Service:      name,
+		Service:      key.service,
 		UpstreamName: cfg.UpstreamName,
 		Affinity:     cfg.Affinity,
 	}
@@ -241,35 +267,35 @@ func (c *Controller) addWeightedServers(ctx context.Context, upstream *provider.
 	}
 }
 
-func (c *Controller) refreshServiceConfig(ctx context.Context, serviceName string) {
-	containers, err := c.docker.ListManagedContainers(ctx, c.project)
+func (c *Controller) refreshServiceConfig(ctx context.Context, key serviceKey) {
+	containers, err := c.docker.ListManagedContainers(ctx, key.project)
 	if err != nil {
 		slog.Error("error listing containers", "component", "controller", "err", err)
 		return
 	}
 
-	serviceContainers := filterServiceContainers(containers, serviceName)
+	serviceContainers := filterServiceContainers(containers, key)
 
 	if len(serviceContainers) == 0 {
 		c.refreshAllConfigs(ctx)
 		return
 	}
 
-	if c.shouldSkipRefresh(serviceName) {
+	if c.shouldSkipRefresh(key) {
 		return
 	}
 
 	cfg, err := config.ParseLabels(serviceContainers[0].Labels)
 	if err != nil {
-		slog.Error("error parsing labels", "component", "controller", "service", serviceName, "err", err)
+		slog.Error("error parsing labels", "component", "controller", "service", key.deployKey(), "err", err)
 		return
 	}
 
 	c.resolveNginxProxyUpstream(ctx, cfg, serviceContainers)
-	c.generateServiceConfig(ctx, serviceName, cfg, serviceContainers, true)
+	c.generateServiceConfig(ctx, key, cfg, serviceContainers, true)
 }
 
-func (c *Controller) refreshServiceConfigAfter(ctx context.Context, serviceName string, delay time.Duration) {
+func (c *Controller) refreshServiceConfigAfter(ctx context.Context, key serviceKey, delay time.Duration) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -279,7 +305,7 @@ func (c *Controller) refreshServiceConfigAfter(ctx context.Context, serviceName 
 			return
 		}
 
-		c.refreshServiceConfig(ctx, serviceName)
+		c.refreshServiceConfig(ctx, key)
 	}()
 }
 
@@ -292,18 +318,18 @@ func (c *Controller) refreshAllConfigs(ctx context.Context) {
 	c.syncServicesConfigs(ctx, groupContainersByService(containers), true, true)
 }
 
-func (c *Controller) shouldSkipRefresh(serviceName string) bool {
+func (c *Controller) shouldSkipRefresh(key serviceKey) bool {
 	c.mu.Lock()
-	_, deploying := c.deployments[serviceName]
+	_, deploying := c.deployments[key.deployKey()]
 	c.mu.Unlock()
 
 	if deploying {
 		return true
 	}
 
-	ds, err := c.stateManager.Load(serviceName)
+	ds, err := c.managerFor(key.project).Load(key.service)
 	if err == nil && ds.Status == state.StatusInProgress && !ds.IsStale(state.DefaultStaleThreshold) {
-		slog.Info("deployment in progress, skipping config refresh", "component", "controller", "service", serviceName)
+		slog.Info("deployment in progress, skipping config refresh", "component", "controller", "service", key.deployKey())
 		return true
 	}
 

@@ -1,0 +1,64 @@
+name: global-infra
+
+# Shared infra stack: one docker-release instance managing all projects.
+# Bring this up first, then start project-alpha and project-beta in any order.
+#
+#   docker compose up -d
+#   docker compose -f project-alpha/docker-compose.yml up -d
+#   docker compose -f project-beta/docker-compose.yml up -d
+#
+# Trigger a release from either project (note --project flag):
+#   docker compose exec docker-release dr release app --project alpha
+#   docker compose exec docker-release dr release app --project beta
+#
+# Both projects have a service named "app" — they must stay isolated.
+
+networks:
+  web:
+    name: test-global-web
+
+volumes:
+  nginx-tmpl:
+  dr-state:
+
+services:
+  docker-release:
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    image: docker-release:local
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - nginx-tmpl:/shared/nginx-tmpl:rw
+      - dr-state:/var/lib/docker-release
+    command: ["watch"]
+    environment:
+      - DR_ALL_PROJECTS=true
+      - DR_EXPOSE_API=true
+      - DR_EXPOSE_WEB=true
+    ports:
+      - "9080:9080"
+      - "9081:9081"
+    healthcheck:
+      test: ["CMD", "dr", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks: []
+
+  nginx-proxy:
+    image: nginxproxy/nginx-proxy:alpine
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - nginx-tmpl:/app/custom:ro
+    environment:
+      - NGINX_TMPL=/app/custom/nginx.tmpl
+      - DEFAULT_HOST=localhost
+      - HTTP_PORT=8080
+    depends_on:
+      docker-release:
+        condition: service_healthy
+    networks: [web]
