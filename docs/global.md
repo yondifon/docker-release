@@ -150,8 +150,10 @@ dr release app --project beta    # deploys beta/app only
 
 Two Compose stacks with the same `name:` value cannot coexist on one Docker host — both claim the same container names (e.g. `alpha-app-1`). This is a Docker Compose constraint. Give each project a distinct `name:` field.
 
-## nginx-proxy Is the Best Fit
+## Supported Providers
 
-nginx-proxy is the natural provider for global mode. It routes by `VIRTUAL_HOST`, which is already unique per hostname — no per-project config namespacing needed. The infra stack example above uses it for this reason.
+Global mode supports `nginx-proxy` and `none` (workers).
 
-Other providers (Nginx, Caddy, Traefik, etc.) write per-service config files and can also be used in global mode, but require the proxy to be reachable from all managed projects.
+`nginx-proxy` is the natural fit: it routes by `VIRTUAL_HOST`, which is already unique per hostname, so no per-project namespacing is needed. The infra stack example above uses it for this reason.
+
+The file-based providers (`nginx`, `angie`, `caddy`, `haproxy`, `traefik`) are **not** supported in global mode. Each derives its config filename and upstream name from the bare service name, so two projects with the same service name would collide. The controller logs an error and skips these providers when running with `DR_ALL_PROJECTS=true`. Use a dedicated per-project `docker-release` instance for them instead.

@@ -56,6 +56,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		requireProjectInGlobalMode(opts.project)
 		run(opts.project, func(ctrl *controller.Controller) error {
 			return runRelease(ctrl, opts.project, os.Args[2], opts)
 		})
@@ -73,6 +74,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		requireProjectInGlobalMode(opts.project)
 		run(opts.project, func(ctrl *controller.Controller) error {
 			return ctrl.Rollback(context.Background(), opts.project, os.Args[2])
 		})
@@ -86,6 +88,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		requireProjectInGlobalMode(opts.project)
 		run(opts.project, func(ctrl *controller.Controller) error {
 			return ctrl.Status(context.Background(), opts.project, opts.service)
 		})
@@ -111,9 +114,28 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		requireProjectInGlobalMode(opts.project)
 		run(opts.project, func(ctrl *controller.Controller) error {
 			return runRelease(ctrl, opts.project, os.Args[1], opts)
 		})
+	}
+}
+
+// globalMode reports whether the controller manages all Compose projects from a
+// single instance (DR_ALL_PROJECTS=true).
+func globalMode() bool {
+	v := os.Getenv("DR_ALL_PROJECTS")
+	return v == "true" || v == "1"
+}
+
+// requireProjectInGlobalMode fails loud when a per-service command (release,
+// rollback, status) runs in global mode without an explicit --project. Without
+// it the project falls back to "" and the command would span every project on
+// the host — deploying a cross-project mix or silently dropping detached work.
+func requireProjectInGlobalMode(project string) {
+	if globalMode() && project == "" {
+		fmt.Fprintln(os.Stderr, "error: DR_ALL_PROJECTS is set; this command requires --project <name>")
+		os.Exit(1)
 	}
 }
 
@@ -181,14 +203,12 @@ func run(explicitProject string, fn func(*controller.Controller) error) {
 	}
 	defer dockerClient.Close()
 
-	globalMode := os.Getenv("DR_ALL_PROJECTS") == "true" || os.Getenv("DR_ALL_PROJECTS") == "1"
-
 	var project string
 	switch {
 	case explicitProject != "":
 		// Explicit --project flag always wins.
 		project = explicitProject
-	case globalMode:
+	case globalMode():
 		// Watch command in global mode: no project filter.
 		project = ""
 	default:
