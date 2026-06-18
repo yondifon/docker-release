@@ -24,6 +24,8 @@ type mockDockerAPI struct {
 	createResult  container.CreateResponse
 	createErr     error
 	startErr      error
+	listResult    []types.Container
+	listErr       error
 
 	capturedConfig     *container.Config
 	capturedHostConfig *container.HostConfig
@@ -33,6 +35,10 @@ type mockDockerAPI struct {
 
 func (m *mockDockerAPI) ContainerInspect(_ context.Context, _ string) (types.ContainerJSON, error) {
 	return m.inspectResult, nil
+}
+
+func (m *mockDockerAPI) ContainerList(_ context.Context, _ container.ListOptions) ([]types.Container, error) {
+	return m.listResult, m.listErr
 }
 
 func (m *mockDockerAPI) ContainerCreate(_ context.Context, cfg *container.Config, hostCfg *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
@@ -121,6 +127,58 @@ func refFixture() (types.Container, types.ContainerJSON) {
 
 func newClient(mock *mockDockerAPI) *Client {
 	return &Client{api: mock}
+}
+
+func TestFindContainerByImageSkipsControllerOnlyImage(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockDockerAPI{listResult: []types.Container{
+		{
+			ID:    "controller-id",
+			Image: "malico/docker-release-nginx:latest",
+			Labels: map[string]string{
+				imageTitleLabel: "docker-release",
+			},
+		},
+		{
+			ID:     "nginx-id",
+			Image:  "nginx:alpine",
+			Labels: map[string]string{},
+		},
+	}}
+
+	ctr, err := newClient(mock).FindContainerByImage(context.Background(), "", "nginx")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if ctr.ID != "nginx-id" {
+		t.Errorf("container ID = %s, want nginx-id", ctr.ID)
+	}
+}
+
+func TestFindContainerByImageAllowsBundledProxyImage(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockDockerAPI{listResult: []types.Container{
+		{
+			ID:    "bundled-id",
+			Image: "malico/docker-release-nginx:latest",
+			Labels: map[string]string{
+				imageTitleLabel:   "docker-release",
+				bundledProxyLabel: "nginx",
+			},
+		},
+	}}
+
+	ctr, err := newClient(mock).FindContainerByImage(context.Background(), "", "nginx")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if ctr.ID != "bundled-id" {
+		t.Errorf("container ID = %s, want bundled-id", ctr.ID)
+	}
 }
 
 func TestCreateContainerFromImage_CopiesConfigFields(t *testing.T) {

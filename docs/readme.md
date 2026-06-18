@@ -14,6 +14,17 @@ When you run `docker release app`, it:
 
 It never touches traffic directly. Your proxy — nginx-proxy, Nginx, Caddy, Traefik, HAProxy, or Angie — serves all requests.
 
+## Images
+
+| Image | Use |
+|---|---|
+| `malico/docker-release` | controller-only sidecar; bring your own proxy service |
+| `malico/docker-release-nginx` | draft bundled Nginx + controller image |
+
+The bundled Nginx image keeps the same `dr` entrypoint, so `docker release help` and all host plugin commands still work.
+
+The controller-only image is built without bundled proxy code. Bundled images overlay a `dr` binary built with the provider-specific build tag, so dormant proxy code does not ship in the default runtime.
+
 ## Deploy Strategies
 
 Three strategies control how traffic shifts from old to new containers during a deploy.
@@ -74,17 +85,19 @@ release.affinity: cookie  # sticky sessions (Angie, Caddy, HAProxy, Traefik only
 | Label | Value |
 |---|---|
 | `release.enable` | `"true"` — marks this service for management |
-| `release.provider` | `nginx-proxy`, `nginx`, `caddy`, `traefik`, `angie`, `haproxy`, or `none` |
 
 ### Common
 
 | Label | Default | Description |
 |---|---|---|
 | `release.strategy` | `linear` | Deploy strategy: `linear`, `blue-green`, or `canary` |
+| `release.provider` | `nginx-proxy` or `DR_DEFAULT_PROVIDER` | `nginx-proxy`, `nginx`, `caddy`, `traefik`, `angie`, `haproxy`, or `none` |
 | `release.health_check_timeout` | `60s` | Max time to wait for a new container to become healthy |
 | `release.drain_timeout` | `10s` | Time to wait for in-flight requests before stopping old containers |
 | `release.affinity` | `ip` | Session affinity: `ip`, `cookie`, or empty |
 | `release.upstream` | service name | Override the upstream name used in proxy config |
+
+`DR_DEFAULT_PROVIDER` can set the provider default for a controller image. `malico/docker-release-nginx` sets it to `nginx`, so managed app services only need `release.enable: "true"` unless they need an override.
 
 ### Strategy Labels
 
@@ -102,6 +115,12 @@ release.affinity: cookie  # sticky sessions (Angie, Caddy, HAProxy, Traefik only
 |---|---|---|
 | `release.nginx.service` | auto-detected | Compose service name of Nginx in this stack |
 | `release.nginx.config_dir` | `/shared/nginx-config` | Shared volume path for Nginx upstream files |
+| `release.nginx.route_dir` | `/shared/nginx-routes` | Bundled Nginx route snippet path |
+| `release.nginx.host` | empty | Bundled Nginx hostname for this service |
+| `release.nginx.path` | empty | Bundled Nginx route path for this service |
+| `release.nginx.ssl.cert` | empty | Mounted TLS certificate path for this service |
+| `release.nginx.ssl.key` | empty | Mounted TLS key path for this service |
+| `release.nginx.ssl.redirect` | `false` | Redirect HTTP to HTTPS for this service |
 | `release.angie.service` | auto-detected | Compose service name of Angie |
 | `release.angie.config_dir` | `/shared/angie-config` | Shared volume path for Angie upstream files |
 | `release.caddy.service` | auto-detected | Compose service name of Caddy |
@@ -110,6 +129,12 @@ release.affinity: cookie  # sticky sessions (Angie, Caddy, HAProxy, Traefik only
 | `release.haproxy.config_dir` | `/shared/haproxy-config` | Shared volume path for HAProxy backend files |
 | `release.traefik.config_dir` | `/shared/traefik-config` | Shared volume path for Traefik dynamic config files |
 | `release.nginx_proxy.config_dir` | `/shared/nginx-tmpl` | Shared volume path for the nginx-proxy template |
+
+### Bundled Nginx Env
+
+| Env var | Default | Description |
+|---|---|---|
+| `DR_NGINX_SKIP_CONFIG` | off | Use a fully mounted `/etc/nginx/nginx.conf` instead of generated config |
 
 ## Health Checks
 

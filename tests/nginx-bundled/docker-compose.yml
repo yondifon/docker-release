@@ -1,0 +1,58 @@
+services:
+  docker-release:
+    build:
+      context: ../../
+      dockerfile: dockerfiles/nginx.Dockerfile
+      args:
+        BASE_IMAGE: docker-release:local
+        VERSION: local
+    image: docker-release-nginx:local
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - docker-release-state:/var/lib/docker-release:rw
+    command: ["watch"]
+    ports:
+      - "8089:80"
+
+  linear_app:
+    image: traefik/whoami
+    environment:
+      - WHOAMI_NAME=linear
+    labels:
+      - "release.enable=true"
+      - "release.nginx.host=linear.localhost"
+      - "release.nginx.path=/linear/"
+      - "release.strategy=linear"
+      - "release.health_check_timeout=20s"
+      - "release.drain_timeout=5s"
+
+  canary_app:
+    image: traefik/whoami
+    environment:
+      - WHOAMI_NAME=canary
+    labels:
+      - "release.enable=true"
+      - "release.nginx.host=canary.localhost"
+      - "release.nginx.path=/canary/"
+      - "release.strategy=canary"
+      - "release.canary.start_percentage=25"
+      - "release.canary.step=25"
+      - "release.canary.interval=10s"
+      - "release.affinity=cookie"
+      - "release.health_check_timeout=20s"
+
+  blue_green_app:
+    image: traefik/whoami
+    environment:
+      - WHOAMI_NAME=blue_green
+    labels:
+      - "release.enable=true"
+      - "release.nginx.host=bluegreen.localhost"
+      - "release.nginx.path=/bluegreen/"
+      - "release.strategy=blue-green"
+      - "release.bg.soak_time=30s"
+      - "release.bg.green_weight=50"
+      - "release.health_check_timeout=20s"
+
+volumes:
+  docker-release-state:

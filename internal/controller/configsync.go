@@ -16,6 +16,11 @@ import (
 	"github.com/docker/docker/api/types"
 )
 
+type configDir struct {
+	dir string
+	ext string
+}
+
 func (c *Controller) generateInitialConfigs(ctx context.Context, services map[serviceKey][]types.Container) {
 	c.syncServicesConfigs(ctx, services, false, false)
 }
@@ -55,11 +60,6 @@ func (c *Controller) syncServicesConfigs(ctx context.Context, services map[servi
 }
 
 func (c *Controller) cleanStaleConfigs(activeConfigs map[string]*config.ServiceConfig) {
-	type configDir struct {
-		dir string
-		ext string
-	}
-
 	active := make(map[configDir]map[string]bool)
 
 	for name, cfg := range activeConfigs {
@@ -76,11 +76,22 @@ func (c *Controller) cleanStaleConfigs(activeConfigs map[string]*config.ServiceC
 		if dir == "" {
 			continue
 		}
-		cd := configDir{dir: dir, ext: ext}
-		if active[cd] == nil {
-			active[cd] = make(map[string]bool)
+		markActiveConfig(active, configDir{dir: dir, ext: ext}, name)
+		if cfg.Provider == config.ProviderNginx && cfg.NginxRouteDir != "" {
+			locationDir := configDir{dir: cfg.NginxRouteDir, ext: ".location"}
+			serverDir := configDir{dir: cfg.NginxRouteDir, ext: ".server"}
+			if active[locationDir] == nil {
+				active[locationDir] = make(map[string]bool)
+			}
+			if active[serverDir] == nil {
+				active[serverDir] = make(map[string]bool)
+			}
+			if cfg.NginxHost != "" {
+				active[serverDir][name] = true
+			} else if cfg.NginxPath != "" {
+				active[locationDir][name] = true
+			}
 		}
-		active[cd][name] = true
 	}
 
 	for cd, services := range active {
@@ -114,6 +125,13 @@ func (c *Controller) cleanStaleConfigs(activeConfigs map[string]*config.ServiceC
 			slog.Info("removed stale config", "component", "controller", "path", path)
 		}
 	}
+}
+
+func markActiveConfig(active map[configDir]map[string]bool, cd configDir, name string) {
+	if active[cd] == nil {
+		active[cd] = make(map[string]bool)
+	}
+	active[cd][name] = true
 }
 
 // supportedInGlobalMode reports whether a provider is safe to manage when one
