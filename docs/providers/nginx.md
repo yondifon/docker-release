@@ -74,6 +74,7 @@ services:
     image: your-registry/app:latest
     labels:
       release.enable: "true"
+      release.nginx.host: app.example.com
       release.nginx.path: "/"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/health"]
@@ -97,20 +98,25 @@ ports:
   - "443:443"
 ```
 
-Enable HTTPS by mounting your cert/key and pointing Nginx at them:
+Each app can have its own host and certs, like nginx-proxy's `VIRTUAL_HOST` model:
 
 ```yaml
 services:
   docker-release:
     image: malico/docker-release-nginx:latest
-    environment:
-      DR_NGINX_SERVER_NAME: example.com
-      DR_NGINX_SSL_CERT: /certs/fullchain.pem
-      DR_NGINX_SSL_KEY: /certs/privkey.pem
-      DR_NGINX_REDIRECT_HTTPS: "true"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./certs:/certs:ro
+
+  app:
+    image: your-registry/app:latest
+    labels:
+      release.enable: "true"
+      release.nginx.host: app.example.com
+      release.nginx.path: "/"
+      release.nginx.ssl.cert: /certs/app/fullchain.pem
+      release.nginx.ssl.key: /certs/app/privkey.pem
+      release.nginx.ssl.redirect: "true"
 ```
 
 Custom config paths:
@@ -118,7 +124,8 @@ Custom config paths:
 | Path | Purpose |
 |---|---|
 | `/shared/nginx-config/*.conf` | generated upstreams, managed by `docker-release` |
-| `/shared/nginx-routes/*.location` | generated `release.nginx.path` routes |
+| `/shared/nginx-routes/*.server` | generated per-service `release.nginx.host` server blocks |
+| `/shared/nginx-routes/*.location` | generated hostless `release.nginx.path` fallback routes |
 | `/etc/docker-release/nginx/http.d/*.conf` | custom `http` context snippets |
 | `/etc/docker-release/nginx/conf.d/*.conf` | custom top-level `http` snippets, including extra `server` blocks |
 | `/etc/docker-release/nginx/server.d/*.conf` | custom snippets inside the generated HTTP/HTTPS server |
@@ -169,8 +176,12 @@ docker release app
 |---|---|---|
 | `release.nginx.service` | auto-detected | multiple Nginx containers in the project |
 | `release.nginx.config_dir` | `/shared/nginx-config` | volume mounted at a different path |
-| `release.nginx.route_dir` | `/shared/nginx-routes` | generated `release.nginx.path` route files need a different path |
+| `release.nginx.route_dir` | `/shared/nginx-routes` | generated Nginx route files need a different path |
+| `release.nginx.host` | empty | bundled Nginx should generate a server block for this host |
 | `release.nginx.path` | empty | bundled Nginx should generate a route for this service |
+| `release.nginx.ssl.cert` | empty | mounted TLS certificate path for this service |
+| `release.nginx.ssl.key` | empty | mounted TLS key path for this service |
+| `release.nginx.ssl.redirect` | `false` | redirect HTTP to HTTPS for this service |
 
 ## Multiple Apps
 

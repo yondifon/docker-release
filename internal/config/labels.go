@@ -11,6 +11,7 @@ import (
 
 var validUpstreamName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 var validRoutePath = regexp.MustCompile(`^/[a-zA-Z0-9._~/%-]*$`)
+var validNginxHost = regexp.MustCompile(`^[a-zA-Z0-9*._,-]+$`)
 
 type Strategy string
 
@@ -42,6 +43,11 @@ type ServiceConfig struct {
 	NginxService         string
 	NginxConfigDir       string
 	NginxRouteDir        string
+	NginxHost            string
+	NginxPath            string
+	NginxSSLCert         string
+	NginxSSLKey          string
+	NginxSSLRedirect     bool
 	NginxKeepalive       int
 	AngieService         string
 	AngieConfigDir       string
@@ -54,7 +60,6 @@ type ServiceConfig struct {
 	HAProxyService       string
 	HAProxyConfigDir     string
 	UpstreamName         string
-	NginxPath            string
 
 	BlueGreen BlueGreenConfig
 	Canary    CanaryConfig
@@ -86,6 +91,11 @@ func ParseLabels(labels map[string]string) (*ServiceConfig, error) {
 		NginxService:         getOr(labels, "release.nginx.service", ""),
 		NginxConfigDir:       getOr(labels, "release.nginx.config_dir", ""),
 		NginxRouteDir:        getOr(labels, "release.nginx.route_dir", ""),
+		NginxHost:            getOr(labels, "release.nginx.host", ""),
+		NginxPath:            getOr(labels, "release.nginx.path", ""),
+		NginxSSLCert:         getOr(labels, "release.nginx.ssl.cert", ""),
+		NginxSSLKey:          getOr(labels, "release.nginx.ssl.key", ""),
+		NginxSSLRedirect:     parseBoolOr(labels, "release.nginx.ssl.redirect", false),
 		NginxKeepalive:       parseIntOr(labels, "release.nginx.keepalive", -1),
 		AngieService:         getOr(labels, "release.angie.service", ""),
 		AngieConfigDir:       getOr(labels, "release.angie.config_dir", ""),
@@ -98,8 +108,6 @@ func ParseLabels(labels map[string]string) (*ServiceConfig, error) {
 		HAProxyService:       getOr(labels, "release.haproxy.service", ""),
 		HAProxyConfigDir:     getOr(labels, "release.haproxy.config_dir", ""),
 		UpstreamName:         getOr(labels, "release.upstream", ""),
-		NginxPath:            getOr(labels, "release.nginx.path", ""),
-
 		BlueGreen: BlueGreenConfig{
 			SoakTime:    parseDurationOr(labels, "release.bg.soak_time", 5*time.Minute),
 			GreenWeight: parseIntOr(labels, "release.bg.green_weight", 50),
@@ -221,6 +229,30 @@ func (c *ServiceConfig) validate() error {
 		return fmt.Errorf("release.nginx.path %q must start with / and contain only URL path characters", c.NginxPath)
 	}
 
+	if c.NginxHost != "" && !validNginxHost.MatchString(c.NginxHost) {
+		return fmt.Errorf("release.nginx.host %q contains invalid hostname characters", c.NginxHost)
+	}
+
+	if (c.NginxSSLCert == "") != (c.NginxSSLKey == "") {
+		return fmt.Errorf("release.nginx.ssl.cert and release.nginx.ssl.key must be set together")
+	}
+
+	if c.NginxSSLRedirect && c.NginxSSLCert == "" {
+		return fmt.Errorf("release.nginx.ssl.redirect requires release.nginx.ssl.cert and release.nginx.ssl.key")
+	}
+
+	for _, p := range []string{c.NginxSSLCert, c.NginxSSLKey} {
+		if p == "" {
+			continue
+		}
+		if !strings.HasPrefix(p, "/") {
+			return fmt.Errorf("nginx ssl paths must be absolute")
+		}
+		if containsDotDot(p) || strings.ContainsAny(p, ";{}\n\r\t\"") {
+			return fmt.Errorf("nginx ssl paths contain invalid characters")
+		}
+	}
+
 	return nil
 }
 
@@ -303,6 +335,22 @@ func parseIntOr(labels map[string]string, key string, fallback int) int {
 	}
 
 	return n
+}
+
+func parseBoolOr(labels map[string]string, key string, fallback bool) bool {
+	v, ok := labels[key]
+	if !ok || v == "" {
+		return fallback
+	}
+
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func parseDurationOr(labels map[string]string, key string, fallback time.Duration) time.Duration {

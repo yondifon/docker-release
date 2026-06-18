@@ -78,12 +78,18 @@ func (c *Controller) cleanStaleConfigs(activeConfigs map[string]*config.ServiceC
 		}
 		markActiveConfig(active, configDir{dir: dir, ext: ext}, name)
 		if cfg.Provider == config.ProviderNginx && cfg.NginxRouteDir != "" {
-			cd := configDir{dir: cfg.NginxRouteDir, ext: ".location"}
-			if active[cd] == nil {
-				active[cd] = make(map[string]bool)
+			locationDir := configDir{dir: cfg.NginxRouteDir, ext: ".location"}
+			serverDir := configDir{dir: cfg.NginxRouteDir, ext: ".server"}
+			if active[locationDir] == nil {
+				active[locationDir] = make(map[string]bool)
 			}
-			if cfg.NginxPath != "" {
-				active[cd][name] = true
+			if active[serverDir] == nil {
+				active[serverDir] = make(map[string]bool)
+			}
+			if cfg.NginxHost != "" {
+				active[serverDir][name] = true
+			} else if cfg.NginxPath != "" {
+				active[locationDir][name] = true
 			}
 		}
 	}

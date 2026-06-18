@@ -201,7 +201,7 @@ func TestRenderUpstreamBackupSkippedWithIpHash(t *testing.T) {
 
 func TestGenerateConfigWritesFile(t *testing.T) {
 	dir := t.TempDir()
-	p := NewNginx(dir, "", "", nil, "", "")
+	p := NewNginx(dir, "", NginxRoute{}, nil, "", "")
 
 	state := &UpstreamState{
 		Service: "webapp",
@@ -238,7 +238,7 @@ func TestGenerateConfigWritesFile(t *testing.T) {
 func TestGenerateConfigWritesRouteFile(t *testing.T) {
 	dir := t.TempDir()
 	routeDir := t.TempDir()
-	p := NewNginx(dir, routeDir, "/app/", nil, "", "")
+	p := NewNginx(dir, routeDir, NginxRoute{Path: "/app/"}, nil, "", "")
 
 	state := &UpstreamState{
 		Service: "webapp",
@@ -260,5 +260,59 @@ func TestGenerateConfigWritesRouteFile(t *testing.T) {
 	}
 	if !strings.Contains(content, "proxy_pass http://webapp_upstream/;") {
 		t.Error("route missing proxy_pass")
+	}
+}
+
+func TestGenerateConfigWritesServerFile(t *testing.T) {
+	dir := t.TempDir()
+	routeDir := t.TempDir()
+	p := NewNginx(dir, routeDir, NginxRoute{Host: "app.localhost", Path: "/"}, nil, "", "")
+
+	state := &UpstreamState{
+		Service: "webapp",
+		Servers: []Server{{Addr: "172.18.0.5:3000"}},
+	}
+
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
+		t.Fatalf("generate error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(routeDir, "webapp.server"))
+	if err != nil {
+		t.Fatalf("read server error: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "server_name app.localhost;") {
+		t.Error("server route missing server_name")
+	}
+	if !strings.Contains(content, "proxy_pass http://webapp_upstream/;") {
+		t.Error("server route missing proxy_pass")
+	}
+}
+
+func TestRenderNginxServerHTTPSRedirect(t *testing.T) {
+	state := &UpstreamState{Service: "webapp"}
+	route := NginxRoute{
+		Host:        "app.localhost,www.localhost",
+		Path:        "/",
+		SSLCert:     "/certs/app/fullchain.pem",
+		SSLKey:      "/certs/app/privkey.pem",
+		SSLRedirect: true,
+	}
+
+	got := renderNginxServer(state, route)
+
+	if !strings.Contains(got, "server_name app.localhost www.localhost;") {
+		t.Error("server route should normalize comma-separated hosts")
+	}
+	if !strings.Contains(got, "return 308 https://$host$request_uri;") {
+		t.Error("server route missing HTTP redirect")
+	}
+	if !strings.Contains(got, "listen 443 ssl;") {
+		t.Error("server route missing HTTPS listener")
+	}
+	if !strings.Contains(got, "ssl_certificate /certs/app/fullchain.pem;") {
+		t.Error("server route missing cert")
 	}
 }

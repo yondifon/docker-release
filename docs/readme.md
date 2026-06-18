@@ -116,7 +116,11 @@ release.affinity: cookie  # sticky sessions (Angie, Caddy, HAProxy, Traefik only
 | `release.nginx.service` | auto-detected | Compose service name of Nginx in this stack |
 | `release.nginx.config_dir` | `/shared/nginx-config` | Shared volume path for Nginx upstream files |
 | `release.nginx.route_dir` | `/shared/nginx-routes` | Bundled Nginx route snippet path |
+| `release.nginx.host` | empty | Bundled Nginx hostname for this service |
 | `release.nginx.path` | empty | Bundled Nginx route path for this service |
+| `release.nginx.ssl.cert` | empty | Mounted TLS certificate path for this service |
+| `release.nginx.ssl.key` | empty | Mounted TLS key path for this service |
+| `release.nginx.ssl.redirect` | `false` | Redirect HTTP to HTTPS for this service |
 | `release.angie.service` | auto-detected | Compose service name of Angie |
 | `release.angie.config_dir` | `/shared/angie-config` | Shared volume path for Angie upstream files |
 | `release.caddy.service` | auto-detected | Compose service name of Caddy |
@@ -130,12 +134,6 @@ release.affinity: cookie  # sticky sessions (Angie, Caddy, HAProxy, Traefik only
 
 | Env var | Default | Description |
 |---|---|---|
-| `DR_NGINX_HTTP_PORT` | `80` | HTTP listen port inside the container |
-| `DR_NGINX_HTTPS_PORT` | `443` | HTTPS listen port inside the container |
-| `DR_NGINX_SERVER_NAME` | `_` | Generated Nginx `server_name` |
-| `DR_NGINX_SSL_CERT` | empty | Mounted certificate path; enables HTTPS with `DR_NGINX_SSL_KEY` |
-| `DR_NGINX_SSL_KEY` | empty | Mounted key path; enables HTTPS with `DR_NGINX_SSL_CERT` |
-| `DR_NGINX_REDIRECT_HTTPS` | off | Redirect HTTP to HTTPS; requires cert/key |
 | `DR_NGINX_SKIP_CONFIG` | off | Use a fully mounted `/etc/nginx/nginx.conf` instead of generated config |
 
 ## Health Checks

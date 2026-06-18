@@ -33,7 +33,13 @@ func NewFactory(dockerClient *docker.Client, project string) *Factory {
 func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 	switch cfg.Provider {
 	case config.ProviderNginx:
-		return NewNginx(cfg.NginxConfigDir, cfg.NginxRouteDir, cfg.NginxPath, f.docker, cfg.NginxService, f.project), nil
+		return NewNginx(cfg.NginxConfigDir, cfg.NginxRouteDir, NginxRoute{
+			Host:        cfg.NginxHost,
+			Path:        cfg.NginxPath,
+			SSLCert:     cfg.NginxSSLCert,
+			SSLKey:      cfg.NginxSSLKey,
+			SSLRedirect: cfg.NginxSSLRedirect,
+		}, f.docker, cfg.NginxService, f.project), nil
 	case config.ProviderAngie:
 		return NewAngie(cfg.AngieConfigDir, f.docker, cfg.AngieService, f.project), nil
 	case config.ProviderTraefik:

@@ -19,7 +19,11 @@ func TestParseLabels(t *testing.T) {
 		"release.canary.interval":         "1m",
 		"release.nginx.service":           "my-nginx",
 		"release.nginx.keepalive":         "20",
+		"release.nginx.host":              "app.localhost,www.localhost",
 		"release.nginx.path":              "/app/",
+		"release.nginx.ssl.cert":          "/certs/app/fullchain.pem",
+		"release.nginx.ssl.key":           "/certs/app/privkey.pem",
+		"release.nginx.ssl.redirect":      "true",
 	}
 
 	cfg, err := ParseLabels(labels)
@@ -62,6 +66,18 @@ func TestParseLabels(t *testing.T) {
 	}
 	if cfg.NginxPath != "/app/" {
 		t.Errorf("nginx_path = %s, want /app/", cfg.NginxPath)
+	}
+	if cfg.NginxHost != "app.localhost,www.localhost" {
+		t.Errorf("nginx_host = %s, want app.localhost,www.localhost", cfg.NginxHost)
+	}
+	if cfg.NginxSSLCert != "/certs/app/fullchain.pem" {
+		t.Errorf("nginx_ssl_cert = %s, want /certs/app/fullchain.pem", cfg.NginxSSLCert)
+	}
+	if cfg.NginxSSLKey != "/certs/app/privkey.pem" {
+		t.Errorf("nginx_ssl_key = %s, want /certs/app/privkey.pem", cfg.NginxSSLKey)
+	}
+	if !cfg.NginxSSLRedirect {
+		t.Error("nginx_ssl_redirect = false, want true")
 	}
 }
 
@@ -429,6 +445,42 @@ func TestParseLabelsInvalidRoutePath(t *testing.T) {
 	_, err := ParseLabels(labels)
 	if err == nil {
 		t.Fatal("expected error for invalid release.nginx.path")
+	}
+}
+
+func TestParseLabelsInvalidNginxHost(t *testing.T) {
+	labels := map[string]string{
+		"release.enable":     "true",
+		"release.nginx.host": `app.localhost;return 200`,
+	}
+
+	_, err := ParseLabels(labels)
+	if err == nil {
+		t.Fatal("expected error for invalid release.nginx.host")
+	}
+}
+
+func TestParseLabelsNginxSSLCertRequiresKey(t *testing.T) {
+	labels := map[string]string{
+		"release.enable":         "true",
+		"release.nginx.ssl.cert": "/certs/app/fullchain.pem",
+	}
+
+	_, err := ParseLabels(labels)
+	if err == nil {
+		t.Fatal("expected error for nginx ssl cert without key")
+	}
+}
+
+func TestParseLabelsNginxSSLRedirectRequiresCert(t *testing.T) {
+	labels := map[string]string{
+		"release.enable":             "true",
+		"release.nginx.ssl.redirect": "true",
+	}
+
+	_, err := ParseLabels(labels)
+	if err == nil {
+		t.Fatal("expected error for nginx ssl redirect without cert")
 	}
 }
 

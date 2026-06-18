@@ -20,6 +20,7 @@ services:
       - WHOAMI_NAME=linear
     labels:
       - "release.enable=true"
+      - "release.nginx.host=linear.localhost"
       - "release.nginx.path=/linear/"
       - "release.strategy=linear"
       - "release.health_check_timeout=20s"
@@ -31,6 +32,7 @@ services:
       - WHOAMI_NAME=canary
     labels:
       - "release.enable=true"
+      - "release.nginx.host=canary.localhost"
       - "release.nginx.path=/canary/"
       - "release.strategy=canary"
       - "release.canary.start_percentage=25"
@@ -45,6 +47,7 @@ services:
       - WHOAMI_NAME=blue_green
     labels:
       - "release.enable=true"
+      - "release.nginx.host=bluegreen.localhost"
       - "release.nginx.path=/bluegreen/"
       - "release.strategy=blue-green"
       - "release.bg.soak_time=30s"
