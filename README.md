@@ -10,6 +10,13 @@ Zero-downtime deploys for Docker Compose. Starts new containers, waits for healt
 
 Your proxy still serves all traffic. `docker-release` only manages the container lifecycle and proxy config.
 
+## Images
+
+| Image | Use |
+|---|---|
+| `malico/docker-release` | controller-only sidecar |
+| `malico/docker-release-nginx` | draft bundled Nginx + controller |
+
 ## Pick Your Proxy
 
 | Proxy | Guide |

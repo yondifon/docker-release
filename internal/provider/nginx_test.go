@@ -201,7 +201,7 @@ func TestRenderUpstreamBackupSkippedWithIpHash(t *testing.T) {
 
 func TestGenerateConfigWritesFile(t *testing.T) {
 	dir := t.TempDir()
-	p := NewNginx(dir, nil, "", "")
+	p := NewNginx(dir, "", "", nil, "", "")
 
 	state := &UpstreamState{
 		Service: "webapp",
@@ -232,5 +232,33 @@ func TestGenerateConfigWritesFile(t *testing.T) {
 	tmp := path + ".tmp"
 	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
 		t.Error("temp file not cleaned up")
+	}
+}
+
+func TestGenerateConfigWritesRouteFile(t *testing.T) {
+	dir := t.TempDir()
+	routeDir := t.TempDir()
+	p := NewNginx(dir, routeDir, "/app/", nil, "", "")
+
+	state := &UpstreamState{
+		Service: "webapp",
+		Servers: []Server{{Addr: "172.18.0.5:3000"}},
+	}
+
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
+		t.Fatalf("generate error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(routeDir, "webapp.location"))
+	if err != nil {
+		t.Fatalf("read route error: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "location /app/ {") {
+		t.Error("route missing location block")
+	}
+	if !strings.Contains(content, "proxy_pass http://webapp_upstream/;") {
+		t.Error("route missing proxy_pass")
 	}
 }

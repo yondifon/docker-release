@@ -21,6 +21,11 @@ type Client struct {
 	api client.APIClient
 }
 
+const (
+	imageTitleLabel   = "org.opencontainers.image.title"
+	bundledProxyLabel = "com.malico.docker-release.bundled-proxy"
+)
+
 func NewClient() (*Client, error) {
 	api, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -188,7 +193,11 @@ func (c *Client) findContainerByImage(ctx context.Context, project, keyword stri
 
 	kw := strings.ToLower(keyword)
 	for _, ctr := range containers {
-		if ctr.Labels["org.opencontainers.image.title"] == "docker-release" {
+		if strings.ToLower(ctr.Labels[bundledProxyLabel]) == kw {
+			return ctr, nil
+		}
+
+		if ctr.Labels[imageTitleLabel] == "docker-release" {
 			continue
 		}
 

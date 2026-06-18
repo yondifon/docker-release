@@ -1,21 +1,31 @@
 VERSION ?= $(shell v=$$(git tag --points-at HEAD 2>/dev/null | head -1); echo $${v:-dev})
 IMAGE   ?= malico/docker-release
+NGINX_IMAGE ?= $(IMAGE)-nginx
 
 # Bump type passed as a goal: make publish major|minor|fix
 BUMP := $(filter major minor fix,$(MAKECMDGOALS))
 
-.PHONY: dev dev-remove test build publish tag buildx-builder \
+.PHONY: dev dev-remove test build build-regular build-nginx publish tag buildx-builder \
 	major minor fix print-version \
-	up-nginx up-angie up-traefik up-nginx-proxy up-caddy up-haproxy \
-	down-nginx down-angie down-traefik down-nginx-proxy down-caddy down-haproxy
+	up-nginx up-nginx-bundled up-angie up-traefik up-nginx-proxy up-caddy up-haproxy \
+	down-nginx down-nginx-bundled down-angie down-traefik down-nginx-proxy down-caddy down-haproxy
 
-build: buildx-builder
-	docker buildx build \
-		--builder docker-release-builder \
-		--platform linux/amd64,linux/arm64 \
+build: build-regular build-nginx
+
+build-regular:
+	docker build \
 		--build-arg VERSION=$(VERSION) \
 		-t $(IMAGE):$(VERSION) \
 		-t $(IMAGE):latest \
+		.
+
+build-nginx:
+	docker build \
+		-f dockerfiles/nginx.Dockerfile \
+		--build-arg BASE_IMAGE=$(IMAGE):$(VERSION) \
+		--build-arg VERSION=$(VERSION) \
+		-t $(NGINX_IMAGE):$(VERSION) \
+		-t $(NGINX_IMAGE):latest \
 		.
 
 tag:
@@ -76,10 +86,22 @@ else
 	docker buildx build \
 		--builder docker-release-builder \
 		--platform linux/amd64,linux/arm64 \
+		--target runtime \
 		--build-arg VERSION=$(VERSION) \
 		-t $(IMAGE):$(VERSION) \
 		-t $(IMAGE):latest \
 		$${major:+-t $(IMAGE):$$major} \
+		--push \
+		. && \
+	docker buildx build \
+		--builder docker-release-builder \
+		--platform linux/amd64,linux/arm64 \
+		-f dockerfiles/nginx.Dockerfile \
+		--build-arg BASE_IMAGE=$(IMAGE):$(VERSION) \
+		--build-arg VERSION=$(VERSION) \
+		-t $(NGINX_IMAGE):$(VERSION) \
+		-t $(NGINX_IMAGE):latest \
+		$${major:+-t $(NGINX_IMAGE):$$major} \
 		--push \
 		. && $(MAKE) tag
 endif
@@ -101,9 +123,14 @@ dev-remove:
 
 test:
 	go test ./...
+	go test -tags bundled_nginx ./cmd/docker-release
 
 up-nginx:
 	docker compose -f tests/nginx/docker-compose.yml up --build
+
+up-nginx-bundled:
+	$(MAKE) build-regular IMAGE=docker-release VERSION=local
+	docker compose -f tests/nginx-bundled/docker-compose.yml up --build
 
 up-angie:
 	docker compose -f tests/angie/docker-compose.yml up --build
@@ -122,6 +149,9 @@ up-haproxy:
 
 down-nginx:
 	docker compose -f tests/nginx/docker-compose.yml down -v
+
+down-nginx-bundled:
+	docker compose -f tests/nginx-bundled/docker-compose.yml down -v
 
 down-angie:
 	docker compose -f tests/angie/docker-compose.yml down -v

@@ -58,6 +58,76 @@ volumes:
   nginx-config:
 ```
 
+## Bundled Image (Draft)
+
+Use `malico/docker-release-nginx` when you want one service instead of a controller sidecar plus a separate Nginx service.
+
+```yaml
+services:
+  docker-release:
+    image: malico/docker-release-nginx:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - docker-release-state:/var/lib/docker-release
+
+  app:
+    image: your-registry/app:latest
+    labels:
+      release.enable: "true"
+      release.nginx.path: "/"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  docker-release-state:
+```
+
+`docker-release-nginx` sets `DR_DEFAULT_PROVIDER=nginx`, so app services can omit `release.provider`. Explicit `release.provider` labels still win.
+
+The base `malico/docker-release` image does not include bundled Nginx runtime code. This image overlays a `dr` binary built with the `bundled_nginx` tag.
+
+Publish ports only when this container should receive traffic directly:
+
+```yaml
+ports:
+  - "80:80"
+  - "443:443"
+```
+
+Enable HTTPS by mounting your cert/key and pointing Nginx at them:
+
+```yaml
+services:
+  docker-release:
+    image: malico/docker-release-nginx:latest
+    environment:
+      DR_NGINX_SERVER_NAME: example.com
+      DR_NGINX_SSL_CERT: /certs/fullchain.pem
+      DR_NGINX_SSL_KEY: /certs/privkey.pem
+      DR_NGINX_REDIRECT_HTTPS: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./certs:/certs:ro
+```
+
+Custom config paths:
+
+| Path | Purpose |
+|---|---|
+| `/shared/nginx-config/*.conf` | generated upstreams, managed by `docker-release` |
+| `/shared/nginx-routes/*.location` | generated `release.nginx.path` routes |
+| `/etc/docker-release/nginx/http.d/*.conf` | custom `http` context snippets |
+| `/etc/docker-release/nginx/conf.d/*.conf` | custom top-level `http` snippets, including extra `server` blocks |
+| `/etc/docker-release/nginx/server.d/*.conf` | custom snippets inside the generated HTTP/HTTPS server |
+| `/etc/docker-release/nginx/ssl.d/*.conf` | custom snippets inside the generated HTTPS server before routes |
+| `/etc/docker-release/nginx/https.d/*.conf` | custom snippets inside the generated HTTPS server after routes |
+| `/etc/nginx/nginx.conf` | full bundled config override; set `DR_NGINX_SKIP_CONFIG=true` |
+
+The bundled image waits for initial upstream and route files before starting Nginx. This lets custom mounted config reference generated upstreams like `app_upstream` on first boot.
+
 ## Nginx Config
 
 ```nginx
@@ -84,6 +154,8 @@ release.enable: "true"
 release.provider: nginx
 ```
 
+With `malico/docker-release-nginx`, `release.provider` is optional because the image sets `DR_DEFAULT_PROVIDER=nginx`.
+
 ## Deploy
 
 ```sh
@@ -97,6 +169,8 @@ docker release app
 |---|---|---|
 | `release.nginx.service` | auto-detected | multiple Nginx containers in the project |
 | `release.nginx.config_dir` | `/shared/nginx-config` | volume mounted at a different path |
+| `release.nginx.route_dir` | `/shared/nginx-routes` | generated `release.nginx.path` route files need a different path |
+| `release.nginx.path` | empty | bundled Nginx should generate a route for this service |
 
 ## Multiple Apps
 

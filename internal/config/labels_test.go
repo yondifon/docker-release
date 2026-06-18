@@ -19,6 +19,7 @@ func TestParseLabels(t *testing.T) {
 		"release.canary.interval":         "1m",
 		"release.nginx.service":           "my-nginx",
 		"release.nginx.keepalive":         "20",
+		"release.nginx.path":              "/app/",
 	}
 
 	cfg, err := ParseLabels(labels)
@@ -58,6 +59,9 @@ func TestParseLabels(t *testing.T) {
 	}
 	if cfg.NginxKeepalive != 20 {
 		t.Errorf("nginx.keepalive = %d, want 20", cfg.NginxKeepalive)
+	}
+	if cfg.NginxPath != "/app/" {
+		t.Errorf("nginx_path = %s, want /app/", cfg.NginxPath)
 	}
 }
 
@@ -103,6 +107,44 @@ func TestParseLabelsDefaults(t *testing.T) {
 	}
 }
 
+func TestParseLabelsDefaultProviderFromEnv(t *testing.T) {
+	t.Setenv("DR_DEFAULT_PROVIDER", "nginx")
+
+	labels := map[string]string{
+		"release.enable": "true",
+	}
+
+	cfg, err := ParseLabels(labels)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Provider != ProviderNginx {
+		t.Errorf("default provider = %s, want nginx", cfg.Provider)
+	}
+	if cfg.NginxConfigDir != "/shared/nginx-config" {
+		t.Errorf("nginx_config_dir = %s, want /shared/nginx-config", cfg.NginxConfigDir)
+	}
+}
+
+func TestParseLabelsExplicitProviderOverridesEnvDefault(t *testing.T) {
+	t.Setenv("DR_DEFAULT_PROVIDER", "nginx")
+
+	labels := map[string]string{
+		"release.enable":   "true",
+		"release.provider": "caddy",
+	}
+
+	cfg, err := ParseLabels(labels)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Provider != ProviderCaddy {
+		t.Errorf("provider = %s, want caddy", cfg.Provider)
+	}
+}
+
 func TestProviderDefaults(t *testing.T) {
 	cases := []struct {
 		provider  string
@@ -131,6 +173,22 @@ func TestProviderDefaults(t *testing.T) {
 				t.Errorf("config_dir = %s, want %s", got, tc.wantValue)
 			}
 		})
+	}
+}
+
+func TestParseLabelsNginxRouteDirDefault(t *testing.T) {
+	labels := map[string]string{
+		"release.enable":   "true",
+		"release.provider": "nginx",
+	}
+
+	cfg, err := ParseLabels(labels)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.NginxRouteDir != "/shared/nginx-routes" {
+		t.Errorf("nginx_route_dir = %s, want /shared/nginx-routes", cfg.NginxRouteDir)
 	}
 }
 
@@ -359,6 +417,18 @@ func TestParseLabelsConfigDirTraversal(t *testing.T) {
 	_, err := ParseLabels(labels)
 	if err == nil {
 		t.Fatal("expected error for config_dir with path traversal")
+	}
+}
+
+func TestParseLabelsInvalidRoutePath(t *testing.T) {
+	labels := map[string]string{
+		"release.enable":     "true",
+		"release.nginx.path": `/{return 200;}`,
+	}
+
+	_, err := ParseLabels(labels)
+	if err == nil {
+		t.Fatal("expected error for invalid release.nginx.path")
 	}
 }
 
