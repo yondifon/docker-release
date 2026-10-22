@@ -1,4 +1,4 @@
-//go:build !bundled_nginx && !bundled_angie
+//go:build !bundled_nginx && !bundled_angie && !bundled_caddy
 
 package main
 

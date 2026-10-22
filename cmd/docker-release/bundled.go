@@ -1,4 +1,4 @@
-//go:build bundled_nginx || bundled_angie
+//go:build bundled_nginx || bundled_angie || bundled_caddy
 
 package main
 
@@ -32,12 +32,16 @@ func bundledProxyFromEnv() (*bundledProxy, error) {
 	case "", "none":
 		return nil, nil
 	case bundledProxyName:
-		return &bundledProxy{
+		proxy := &bundledProxy{
 			name:       v,
 			args:       []string{v, "-g", "daemon off;"},
 			configPath: bundledConfigPath,
 			config:     bundledConfig,
-		}, nil
+		}
+		if v == "caddy" {
+			proxy.args = []string{"caddy", "run", "--config", proxy.configPath}
+		}
+		return proxy, nil
 	default:
 		return nil, fmt.Errorf("unknown DR_BUNDLED_PROXY %q", os.Getenv("DR_BUNDLED_PROXY"))
 	}
@@ -108,7 +112,7 @@ func superviseBundledProxy(ctx context.Context, proxy *bundledProxy, run func(co
 	defer func() {
 		cancel()
 		<-controllerDone
-		stopBundledProxy(cmd, proxyDone)
+		stopBundledProxy(cmd, proxyDone, proxy.name)
 		if proxyErr != nil {
 			result = errors.Join(result, fmt.Errorf("bundled %s: %w", proxy.name, proxyErr))
 		}
@@ -191,13 +195,17 @@ func markBundledProxyStarted(proxy *bundledProxy) error {
 	return os.WriteFile(path, []byte(fmt.Sprintf("%d\n", proxy.pid)), 0o644)
 }
 
-func stopBundledProxy(cmd *exec.Cmd, done <-chan struct{}) {
+func stopBundledProxy(cmd *exec.Cmd, done <-chan struct{}, name string) {
 	select {
 	case <-done:
 		return
 	default:
 	}
-	_ = cmd.Process.Signal(syscall.SIGQUIT)
+	sig := syscall.SIGQUIT
+	if name == "caddy" {
+		sig = syscall.SIGTERM
+	}
+	_ = cmd.Process.Signal(sig)
 	select {
 	case <-done:
 	case <-time.After(30 * time.Second):

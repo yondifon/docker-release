@@ -39,7 +39,7 @@ type Controller struct {
 	deployments  map[string]activeDeployment
 	wg           sync.WaitGroup
 	configMu     sync.Mutex
-	nginxConfigs map[nginxConfigDirs]*config.ServiceConfig
+	proxyConfigs map[proxyConfigDirs]*config.ServiceConfig
 }
 
 // New creates a Controller. stateManager is the per-project state manager; in
@@ -112,7 +112,7 @@ func (c *Controller) Watch(ctx context.Context) error {
 	commandTicker := time.NewTicker(time.Second)
 	defer commandTicker.Stop()
 
-	bootstrapCtx := provider.WithNginxBootstrap(ctx)
+	bootstrapCtx := provider.WithProxyBootstrap(ctx)
 	if err := c.generateInitialConfigs(bootstrapCtx, services); err != nil {
 		return fmt.Errorf("generating initial configs: %w", err)
 	}

@@ -30,12 +30,6 @@ type NginxRoute struct {
 	SSLRedirect bool
 }
 
-type nginxBootstrapKey struct{}
-
-func WithNginxBootstrap(ctx context.Context) context.Context {
-	return context.WithValue(ctx, nginxBootstrapKey{}, true)
-}
-
 func NewNginx(configDir, routeDir string, route NginxRoute, dockerClient *docker.Client, serviceName, project string) *NginxProvider {
 	return &NginxProvider{
 		proxyName:   "nginx",
@@ -84,7 +78,7 @@ func (p *NginxProvider) reload(ctx context.Context) error {
 	name := p.proxyName
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), name) {
 		if _, err := os.Stat("/run/docker-release/" + name + ".started"); os.IsNotExist(err) {
-			if bootstrap, _ := ctx.Value(nginxBootstrapKey{}).(bool); bootstrap {
+			if bootstrap, _ := ctx.Value(proxyBootstrapKey{}).(bool); bootstrap {
 				return nil
 			}
 			return fmt.Errorf("bundled %s is not ready; wait until the container is healthy before deploying", name)
