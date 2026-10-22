@@ -135,17 +135,25 @@ Custom config paths:
 | `/etc/docker-release/nginx/https.d/*.conf` | custom snippets inside the generated HTTPS server after routes |
 | `/etc/nginx/nginx.conf` | full bundled config override; set `DR_NGINX_SKIP_CONFIG=true` |
 
-The container becomes healthy only after its initial config is ready and Nginx responds at `/health`. A full config override must serve HTTP 200 at `http://127.0.0.1/health` without a redirect.
+The container becomes healthy only after its initial config is ready and Nginx responds at `/health`. A full config override must keep `master_process` enabled and serve HTTP 200 at `http://127.0.0.1/health` without a redirect.
 
 `release.nginx.host` defaults to path `/` when no path is set. A path without a host adds a route to the default HTTP server. `/health` is reserved there. Each generated path removes its prefix before forwarding: `/app/orders` at path `/app/` reaches your app as `/orders`.
 
 Nginx checks each config change before reloading. If it rejects a change, the previous files are restored and the deployment fails. Check the Nginx logs, labels, and mounted certificates before trying again.
+
+A release keeps old containers running until Nginx accepts the new config.
 
 Keep generated config directories writable and use the same directories for all services sharing this Nginx instance. The default config includes only the paths listed above; changing directory labels also needs a matching config override.
 
 The Nginx master and controller run as root to access the Docker socket and ports 80/443. Nginx workers run as `nginx`. Mounting the Docker socket grants control of the Docker host; use this image only for trusted services.
 
 Restarting the bundled service also restarts Nginx. App releases do not restart it.
+
+Clients must send HTTP headers and finish TLS setup within 10 seconds. This limit does not cap application response times.
+
+To check shutdown handling, start `make up-nginx-bundled`, then run `python3 tests/nginx-bundled/check-shutdown.py` in another terminal. The check opens an incomplete HTTP request and stops the test controller; it must exit cleanly within 15 seconds.
+
+Run `python3 tests/nginx-bundled/check-reload.py` against the running test stack to check delayed reloads. It briefly pauses the Nginx master and replaces `linear_app`; requests must keep succeeding, and the old container must stay alive until Nginx accepts the update.
 
 ## Nginx Config
 

@@ -20,6 +20,7 @@ import (
 type bundledProxy struct {
 	name string
 	args []string
+	pid  int
 }
 
 func bundledProxyFromEnv() (*bundledProxy, error) {
@@ -83,6 +84,7 @@ func superviseBundledProxy(ctx context.Context, proxy *bundledProxy, run func(co
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting bundled %s: %w", proxy.name, err)
 	}
+	proxy.pid = cmd.Process.Pid
 	proxyDone := make(chan struct{})
 	var proxyErr error
 	go func() {
@@ -172,7 +174,7 @@ func markBundledProxyStarted(proxy *bundledProxy) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, nil, 0o644)
+	return os.WriteFile(path, []byte(fmt.Sprintf("%d\n", proxy.pid)), 0o644)
 }
 
 func stopBundledProxy(cmd *exec.Cmd, done <-chan struct{}) {

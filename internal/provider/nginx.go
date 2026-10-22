@@ -102,7 +102,13 @@ func (p *NginxProvider) reload(ctx context.Context) error {
 	if err := p.docker.Exec(ctx, ctr.ID, []string{"/usr/sbin/nginx", "-t"}); err != nil {
 		return fmt.Errorf("nginx rejected config; check its config and certificates: %w", err)
 	}
-	return p.docker.Exec(ctx, ctr.ID, []string{"/usr/sbin/nginx", "-s", "reload"})
+	reload := func() error {
+		return p.docker.Exec(ctx, ctr.ID, []string{"/usr/sbin/nginx", "-s", "reload"})
+	}
+	if ctr.Labels["com.malico.docker-release.bundled-proxy"] == "nginx" {
+		return confirmBundledNginxReload(ctx, reload)
+	}
+	return reload()
 }
 
 func renderUpstream(state *UpstreamState) string {
