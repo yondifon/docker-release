@@ -18,6 +18,7 @@ RUN apk add --no-cache ca-certificates nginx tini \
 
 COPY --from=builder /bin/dr /usr/local/bin/dr
 COPY packaging/nginx/nginx.conf /etc/nginx/nginx.conf
+RUN nginx -t
 
 LABEL org.opencontainers.image.title="docker-release" \
   com.malico.docker-release.bundled-proxy="nginx"
