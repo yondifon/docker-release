@@ -1,6 +1,6 @@
 # Bundle checks
 
-Run commands from the repo root. The Angie fixture uses HTTP port 8090; Nginx uses 8089. Both use the same app image, labels, and checks.
+Run commands from the repo root. The Angie fixture uses HTTP port 8090; Nginx uses 8089; Caddy uses 8091 and HTTPS port 8444. All use the same app image and shared labels.
 
 ```sh
 docker compose -f tests/angie-bundled/docker-compose.yml up --build -d --wait
@@ -11,6 +11,17 @@ docker compose -f tests/angie-bundled/docker-compose.yml down -v
 ```
 
 For Nginx, replace `angie` with `nginx` in each command. The reload check pauses the proxy master for 12 seconds while workers keep serving requests, releases `linear_app`, and checks that its old container survives until the reload is accepted. The shutdown check stops the controller with an incomplete HTTP request open and requires exit 0 within 15 seconds.
+
+For Caddy, run its checks instead of the paused-master check. Caddy serves requests and applies config in one process:
+
+```sh
+docker compose -f tests/caddy-bundled/docker-compose.yml up --build -d --wait
+python3 tests/caddy-bundled/check.py
+python3 tests/bundled/check-shutdown.py caddy
+docker compose -f tests/caddy-bundled/docker-compose.yml down -v
+```
+
+The Caddy check covers stripped paths, HTTP and trusted HTTPS requests during all three release strategies, and certificate storage across bundle recreation. It writes the test CA to `.oga_tmp/caddy-root.crt`; remove that file after checking.
 
 ## TLS
 
@@ -34,4 +45,4 @@ The check trusts only the supplied certificate and verifies HTTP 308 to HTTPS, c
 
 Run the reload check on the HTTP fixture, not the TLS overlay: it expects HTTP 200, not a redirect. Set `BUNDLE_TLS_PORT=8444` on Compose commands and use `--tls-port 8444` to test both TLS stacks at once.
 
-After checking both bundles, remove the local images with `docker image rm docker-release-angie:local docker-release-nginx:local docker-release-test-app:local`. Delete the certificates and other scratch files in `.oga_tmp/` when done.
+After checking, remove the local bundle and app images you built. For Caddy: `docker image rm docker-release-caddy:local docker-release-test-app:local`. Delete the certificates and other scratch files in `.oga_tmp/` when done.
