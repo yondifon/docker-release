@@ -1,4 +1,4 @@
-//go:build bundled_nginx
+//go:build bundled_nginx || bundled_angie
 
 package main
 

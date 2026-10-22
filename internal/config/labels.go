@@ -11,8 +11,8 @@ import (
 
 var validUpstreamName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 var validRoutePath = regexp.MustCompile(`^/[a-zA-Z0-9._~/%-]*$`)
-var validNginxHost = regexp.MustCompile(`^[a-zA-Z0-9_](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9_])?$`)
-var validNginxSSLPath = regexp.MustCompile(`^/[a-zA-Z0-9/._+@%-]+$`)
+var validRouteHost = regexp.MustCompile(`^[a-zA-Z0-9_](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9_])?$`)
+var validTLSPath = regexp.MustCompile(`^/[a-zA-Z0-9/._+@%-]+$`)
 
 type Strategy string
 
@@ -44,14 +44,15 @@ type ServiceConfig struct {
 	NginxService         string
 	NginxConfigDir       string
 	NginxRouteDir        string
-	NginxHost            string
-	NginxPath            string
-	NginxSSLCert         string
-	NginxSSLKey          string
-	NginxSSLRedirect     bool
+	RouteHost            string
+	RoutePath            string
+	TLSCert              string
+	TLSKey               string
+	TLSRedirect          bool
 	NginxKeepalive       int
 	AngieService         string
 	AngieConfigDir       string
+	AngieRouteDir        string
 	AngieKeepalive       int
 	AngieStickyLearnName string
 	TraefikConfigDir     string
@@ -81,7 +82,7 @@ func ParseLabels(labels map[string]string) (*ServiceConfig, error) {
 	if labels["release.enable"] != "true" {
 		return nil, fmt.Errorf("release.enable is not true")
 	}
-	redirect, err := parseNginxRedirect(labels["release.nginx.ssl.redirect"])
+	redirect, err := parseRouteRedirect(routeLabel(labels, "tls.redirect", "ssl.redirect"))
 	if err != nil {
 		return nil, err
 	}
@@ -96,14 +97,15 @@ func ParseLabels(labels map[string]string) (*ServiceConfig, error) {
 		NginxService:         getOr(labels, "release.nginx.service", ""),
 		NginxConfigDir:       getOr(labels, "release.nginx.config_dir", ""),
 		NginxRouteDir:        getOr(labels, "release.nginx.route_dir", ""),
-		NginxHost:            getOr(labels, "release.nginx.host", ""),
-		NginxPath:            getOr(labels, "release.nginx.path", ""),
-		NginxSSLCert:         getOr(labels, "release.nginx.ssl.cert", ""),
-		NginxSSLKey:          getOr(labels, "release.nginx.ssl.key", ""),
-		NginxSSLRedirect:     redirect,
+		RouteHost:            routeLabel(labels, "host", "host"),
+		RoutePath:            routeLabel(labels, "path", "path"),
+		TLSCert:              routeLabel(labels, "tls.cert", "ssl.cert"),
+		TLSKey:               routeLabel(labels, "tls.key", "ssl.key"),
+		TLSRedirect:          redirect,
 		NginxKeepalive:       parseIntOr(labels, "release.nginx.keepalive", -1),
 		AngieService:         getOr(labels, "release.angie.service", ""),
 		AngieConfigDir:       getOr(labels, "release.angie.config_dir", ""),
+		AngieRouteDir:        getOr(labels, "release.angie.route_dir", ""),
 		AngieKeepalive:       parseIntOr(labels, "release.angie.keepalive", -1),
 		AngieStickyLearnName: getOr(labels, "release.angie.sticky.learn.name", ""),
 		TraefikConfigDir:     getOr(labels, "release.traefik.config_dir", ""),
@@ -141,6 +143,13 @@ func defaultProvider() string {
 	return "nginx-proxy"
 }
 
+func routeLabel(labels map[string]string, name, nginxAlias string) string {
+	if value, ok := labels["release."+name]; ok {
+		return value
+	}
+	return labels["release.nginx."+nginxAlias]
+}
+
 func applyProviderDefaults(cfg *ServiceConfig) {
 	switch cfg.Provider {
 	case ProviderNginx:
@@ -157,6 +166,9 @@ func applyProviderDefaults(cfg *ServiceConfig) {
 	case ProviderAngie:
 		if cfg.AngieConfigDir == "" {
 			cfg.AngieConfigDir = "/shared/angie-config"
+		}
+		if cfg.AngieRouteDir == "" && strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "angie") {
+			cfg.AngieRouteDir = "/shared/angie-routes"
 		}
 	case ProviderCaddy:
 		if cfg.CaddyConfigDir == "" {
@@ -220,7 +232,7 @@ func (c *ServiceConfig) validate() error {
 		return fmt.Errorf("caddy.keepalive must be >= 0, got %d", c.CaddyKeepalive)
 	}
 
-	for _, dir := range []string{c.NginxConfigDir, c.NginxRouteDir, c.AngieConfigDir, c.TraefikConfigDir, c.CaddyConfigDir, c.HAProxyConfigDir} {
+	for _, dir := range []string{c.NginxConfigDir, c.NginxRouteDir, c.AngieConfigDir, c.AngieRouteDir, c.TraefikConfigDir, c.CaddyConfigDir, c.HAProxyConfigDir} {
 		if containsDotDot(dir) {
 			return fmt.Errorf("config_dir must not contain '..' path components")
 		}
@@ -230,44 +242,44 @@ func (c *ServiceConfig) validate() error {
 		return fmt.Errorf("upstream name %q must match [a-zA-Z0-9._-]+", c.UpstreamName)
 	}
 
-	if c.NginxPath != "" && !validRoutePath.MatchString(c.NginxPath) {
-		return fmt.Errorf("release.nginx.path %q must start with / and contain only URL path characters", c.NginxPath)
+	if c.RoutePath != "" && !validRoutePath.MatchString(c.RoutePath) {
+		return fmt.Errorf("release.path %q must start with / and contain only URL path characters", c.RoutePath)
 	}
 
-	if c.NginxHost != "" {
-		for _, host := range strings.Split(c.NginxHost, ",") {
+	if c.RouteHost != "" {
+		for _, host := range strings.Split(c.RouteHost, ",") {
 			host = strings.TrimSpace(host)
 			if strings.HasPrefix(host, "*.") {
 				host = strings.TrimPrefix(host, "*.")
 			} else {
 				host = strings.TrimSuffix(host, ".*")
 			}
-			if !validNginxHost.MatchString(host) || strings.Contains(host, "..") {
-				return fmt.Errorf("release.nginx.host %q must contain comma-separated hostnames, with wildcards only at an edge", c.NginxHost)
+			if !validRouteHost.MatchString(host) || strings.Contains(host, "..") {
+				return fmt.Errorf("release.host %q must contain comma-separated hostnames, with wildcards only at an edge", c.RouteHost)
 			}
 		}
 	}
-	if c.NginxHost == "" && c.NginxPath == "/health" {
-		return fmt.Errorf("release.nginx.path /health is reserved; set a host or choose another path")
+	if c.RouteHost == "" && c.RoutePath == "/health" {
+		return fmt.Errorf("release.path /health is reserved; set a host or choose another path")
 	}
 
-	if (c.NginxSSLCert == "") != (c.NginxSSLKey == "") {
-		return fmt.Errorf("release.nginx.ssl.cert and release.nginx.ssl.key must be set together")
+	if (c.TLSCert == "") != (c.TLSKey == "") {
+		return fmt.Errorf("release.tls.cert and release.tls.key must be set together")
 	}
-	if c.NginxSSLCert != "" && c.NginxHost == "" {
-		return fmt.Errorf("release.nginx.ssl.cert requires release.nginx.host")
-	}
-
-	if c.NginxSSLRedirect && c.NginxSSLCert == "" {
-		return fmt.Errorf("release.nginx.ssl.redirect requires release.nginx.ssl.cert and release.nginx.ssl.key")
+	if c.TLSCert != "" && c.RouteHost == "" {
+		return fmt.Errorf("release.tls.cert requires release.host")
 	}
 
-	for _, p := range []string{c.NginxSSLCert, c.NginxSSLKey} {
+	if c.TLSRedirect && c.TLSCert == "" {
+		return fmt.Errorf("release.tls.redirect requires release.tls.cert and release.tls.key")
+	}
+
+	for _, p := range []string{c.TLSCert, c.TLSKey} {
 		if p == "" {
 			continue
 		}
-		if containsDotDot(p) || !validNginxSSLPath.MatchString(p) {
-			return fmt.Errorf("nginx ssl paths must be absolute and contain only letters, numbers, /, ., _, +, @, %% or -")
+		if containsDotDot(p) || !validTLSPath.MatchString(p) {
+			return fmt.Errorf("TLS paths must be absolute and contain only letters, numbers, /, ., _, +, @, %% or -")
 		}
 	}
 
@@ -355,14 +367,14 @@ func parseIntOr(labels map[string]string, key string, fallback int) int {
 	return n
 }
 
-func parseNginxRedirect(v string) (bool, error) {
+func parseRouteRedirect(v string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "true", "yes", "on":
 		return true, nil
 	case "", "0", "false", "no", "off":
 		return false, nil
 	default:
-		return false, fmt.Errorf("release.nginx.ssl.redirect %q is invalid; use true or false", v)
+		return false, fmt.Errorf("release.tls.redirect %q is invalid; use true or false", v)
 	}
 }
 

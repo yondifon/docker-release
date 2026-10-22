@@ -60,84 +60,25 @@ volumes:
 
 ## Bundled Image
 
-Use `malico/docker-release-nginx` when you want one service instead of a controller sidecar plus a separate Nginx service.
+Use `malico/docker-release-nginx` for Nginx and docker-release in one service. Follow [Bundled proxy images](../bundled-images.md) for the Compose setup, routing labels, TLS, defaults, and switching providers.
 
-```yaml
-services:
-  docker-release:
-    image: malico/docker-release-nginx:latest
-    ports:
-      - "80:80"
-    stop_grace_period: 90s
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - docker-release-state:/var/lib/docker-release
+### Custom config
 
-  app:
-    image: your-registry/app:latest
-    labels:
-      release.enable: "true"
-      release.nginx.host: app.example.com
-      release.nginx.path: "/"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-volumes:
-  docker-release-state:
-```
-
-`docker-release-nginx` sets `DR_DEFAULT_PROVIDER=nginx`, so app services can omit `release.provider`. Explicit `release.provider` labels still win.
-
-Omit published ports if another proxy connects to this container over the Compose network. Publish port 443 only when you configure TLS:
-
-```yaml
-ports:
-  - "443:443"
-```
-
-Give each service a different host. You can set several comma-separated hosts for one service. Do not assign the same host to separate services; use your own server block for several paths on one host.
-
-Add the certificate mount and TLS labels to the Compose setup above:
-
-```yaml
-services:
-  docker-release:
-    image: malico/docker-release-nginx:latest
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./certs:/certs:ro
-
-  app:
-    image: your-registry/app:latest
-    labels:
-      release.enable: "true"
-      release.nginx.host: app.example.com
-      release.nginx.path: "/"
-      release.nginx.ssl.cert: /certs/app/fullchain.pem
-      release.nginx.ssl.key: /certs/app/privkey.pem
-      release.nginx.ssl.redirect: "true"
-```
-
-Custom config paths:
+Mount extra snippets read-only at these paths. The `proxy` paths work in both bundles; existing `nginx` paths are also supported.
 
 | Path | Purpose |
 |---|---|
 | `/shared/nginx-config/*.conf` | generated upstreams, managed by `docker-release` |
-| `/shared/nginx-routes/*.server` | generated per-service `release.nginx.host` server blocks |
-| `/shared/nginx-routes/*.location` | generated hostless `release.nginx.path` fallback routes |
-| `/etc/docker-release/nginx/http.d/*.conf` | custom `http` context snippets |
-| `/etc/docker-release/nginx/conf.d/*.conf` | custom top-level `http` snippets, including extra `server` blocks |
-| `/etc/docker-release/nginx/server.d/*.conf` | custom snippets inside the generated HTTP/HTTPS server |
-| `/etc/docker-release/nginx/ssl.d/*.conf` | custom snippets inside the generated HTTPS server before routes |
-| `/etc/docker-release/nginx/https.d/*.conf` | custom snippets inside the generated HTTPS server after routes |
-| `/etc/nginx/nginx.conf` | full bundled config override; set `DR_NGINX_SKIP_CONFIG=true` |
+| `/shared/nginx-routes/*.server` | generated hostname routes |
+| `/shared/nginx-routes/*.location` | generated hostless path routes |
+| `/etc/docker-release/proxy/http.d/*.conf` | custom `http` context snippets |
+| `/etc/docker-release/proxy/conf.d/*.conf` | extra `server` blocks |
+| `/etc/docker-release/proxy/server.d/*.conf` | snippets inside generated HTTP/HTTPS servers |
+| `/etc/docker-release/proxy/ssl.d/*.conf` | snippets before routes in generated HTTPS servers |
+| `/etc/docker-release/proxy/https.d/*.conf` | snippets after routes in generated HTTPS servers |
+| `/etc/nginx/nginx.conf` | full config override; set `DR_PROXY_SKIP_CONFIG=true` |
 
 The container becomes healthy only after its initial config is ready and Nginx responds at `/health`. A full config override must keep `master_process` enabled and serve HTTP 200 at `http://127.0.0.1/health` without a redirect.
-
-`release.nginx.host` defaults to path `/` when no path is set. A path without a host adds a route to the default HTTP server. `/health` is reserved there. Each generated path removes its prefix before forwarding: `/app/orders` at path `/app/` reaches your app as `/orders`.
 
 Nginx checks each config change before reloading. If it rejects a change, the previous files are restored and the deployment fails. Check the Nginx logs, labels, and mounted certificates before trying again.
 
@@ -151,9 +92,7 @@ Restarting the bundled service also restarts Nginx. App releases do not restart 
 
 Clients must send HTTP headers and finish TLS setup within 10 seconds. This limit does not cap application response times.
 
-To check shutdown handling, start `make up-nginx-bundled`, then run `python3 tests/nginx-bundled/check-shutdown.py` in another terminal. The check opens an incomplete HTTP request and stops the test controller; it must exit cleanly within 15 seconds.
-
-Run `python3 tests/nginx-bundled/check-reload.py` against the running test stack to check delayed reloads. It briefly pauses the Nginx master and replaces `linear_app`; requests must keep succeeding, and the old container must stay alive until Nginx accepts the update.
+To check the bundle locally, run `make up-nginx-bundled`. In another terminal, run `python3 tests/bundled/check-reload.py nginx`, then `python3 tests/bundled/check-shutdown.py nginx`. The checks replace an app during a delayed reload and stop the bundle with an incomplete HTTP request. Run `make down-nginx-bundled` to remove the test stack and its volumes.
 
 ## Nginx Config
 

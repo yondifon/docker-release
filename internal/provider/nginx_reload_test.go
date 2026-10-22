@@ -17,15 +17,19 @@ import (
 	"github.com/malico/docker-release/internal/docker"
 )
 
-func nginxReloadFixture(t *testing.T) (*NginxProvider, *atomic.Bool) {
+func nginxReloadFixture(t *testing.T, images ...string) (*NginxProvider, *atomic.Bool) {
 	t.Helper()
+	image := "nginx:alpine"
+	if len(images) > 0 {
+		image = images[0]
+	}
 	var reject atomic.Bool
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		path := strings.TrimPrefix(r.URL.Path, "/v1.47")
 		switch {
 		case path == "/containers/json":
-			_, _ = w.Write([]byte(`[{"Id":"0123456789abcdef","Image":"nginx:alpine"}]`))
+			_ = json.NewEncoder(w).Encode([]map[string]string{{"Id": "0123456789abcdef", "Image": image}})
 		case strings.HasSuffix(path, "/exec"):
 			var body struct{ Cmd []string }
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -268,5 +272,58 @@ func TestNginxDefaultProviderRoutesEachServiceSeparately(t *testing.T) {
 		if err != nil || !strings.Contains(string(data), "server_name "+service+".example.com;") || !strings.Contains(string(data), "http://"+service+"_upstream/") {
 			t.Fatalf("labels did not produce a separate route for %s: %s, %v", service, data, err)
 		}
+	}
+}
+
+func TestBundleSwitchKeepsRoutesAndRejectedChangesDoNotPoisonOtherApps(t *testing.T) {
+	for _, kind := range []string{"nginx", "angie"} {
+		t.Run(kind, func(t *testing.T) {
+			p, reject := nginxReloadFixture(t, kind+":alpine")
+			t.Setenv("DR_DEFAULT_PROVIDER", kind)
+			factory := NewFactory(p.docker, "test")
+			ctx := context.Background()
+			labels := map[string]string{
+				"release.enable": "true", "release.host": "app.example.com",
+				"release.nginx.host": "ignored.example.com", "release.path": "/app/",
+				"release.nginx.config_dir": p.configDir, "release.nginx.route_dir": p.routeDir,
+				"release.angie.config_dir": p.configDir, "release.angie.route_dir": p.routeDir,
+			}
+			deploy := func(service string) error {
+				cfg, err := config.ParseLabels(labels)
+				if err != nil {
+					return err
+				}
+				prov, err := factory.Provider(cfg)
+				if err != nil {
+					return err
+				}
+				state := &UpstreamState{Service: service, Servers: []Server{{Addr: "127.0.0.1:8080"}}}
+				if err := prov.GenerateConfig(ctx, state); err != nil {
+					return err
+				}
+				return prov.Reload(ctx)
+			}
+			if err := deploy("app"); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(p.routeDir, "app.server")
+			before, err := os.ReadFile(path)
+			if err != nil || !strings.Contains(string(before), "server_name app.example.com;") || !strings.Contains(string(before), "location /app/") {
+				t.Fatalf("shared labels did not route the app: %s, %v", before, err)
+			}
+			reject.Store(true)
+			labels["release.host"] = "changed.example.com"
+			if err := deploy("app"); err == nil {
+				t.Fatal("rejected config was accepted")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("rejected update lost working route: %s, %v", after, err)
+			}
+			reject.Store(false)
+			if err := deploy("api"); err != nil {
+				t.Fatalf("rejected config blocked another app: %v", err)
+			}
+		})
 	}
 }

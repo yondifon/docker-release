@@ -102,7 +102,7 @@ func (c *Controller) cleanStaleConfigs(ctx context.Context, activeConfigs map[st
 	active := make(map[configDir]map[string]bool)
 
 	for name, cfg := range activeConfigs {
-		if cfg.Provider == config.ProviderNginx {
+		if cfg.Provider == config.ProviderNginx || (cfg.Provider == config.ProviderAngie && cfg.AngieRouteDir != "") {
 			continue
 		}
 		ext, perService := provider.ConfigExt(cfg.Provider)

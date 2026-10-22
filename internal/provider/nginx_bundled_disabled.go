@@ -1,9 +1,9 @@
-//go:build !bundled_nginx
+//go:build !bundled_nginx && !bundled_angie
 
 package provider
 
 import "context"
 
-func confirmBundledNginxReload(_ context.Context, reload func() error) error {
+func confirmBundledReload(_ context.Context, _ string, reload func() error) error {
 	return reload()
 }

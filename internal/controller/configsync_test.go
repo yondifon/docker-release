@@ -28,7 +28,7 @@ func TestConfigSyncKeepsLiveRoutesWithProjectQualifiedServiceKeys(t *testing.T) 
 	}
 	c := &Controller{project: "stack"}
 	err := c.cleanStaleConfigs(context.Background(), map[string]*config.ServiceConfig{
-		"stack/app": {Provider: config.ProviderNginx, NginxConfigDir: dir, NginxRouteDir: routes, NginxHost: "app.example.com"},
+		"stack/app": {Provider: config.ProviderNginx, NginxConfigDir: dir, NginxRouteDir: routes, RouteHost: "app.example.com"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func controllerConfigFixture(t *testing.T, snapshot func(int32) []types.Containe
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	cfg := &config.ServiceConfig{Provider: config.ProviderNginx, NginxConfigDir: t.TempDir(), NginxRouteDir: t.TempDir(), NginxHost: "app.example.com"}
+	cfg := &config.ServiceConfig{Provider: config.ProviderNginx, NginxConfigDir: t.TempDir(), NginxRouteDir: t.TempDir(), RouteHost: "app.example.com"}
 	c := New(client, state.NewManager(t.TempDir(), "stack"), "stack")
 	return c, cfg
 }
@@ -127,7 +127,7 @@ func TestRefreshDoesNotRestoreContainersReplacedAfterDiscovery(t *testing.T) {
 		"com.docker.compose.project": "stack", "com.docker.compose.service": "app",
 		"release.enable": "true", "release.provider": "nginx",
 		"release.nginx.config_dir": cfg.NginxConfigDir, "release.nginx.route_dir": cfg.NginxRouteDir,
-		"release.nginx.host": cfg.NginxHost,
+		"release.nginx.host": cfg.RouteHost,
 	})
 	c.refreshServiceConfig(context.Background(), serviceKey{project: "stack", service: "app"})
 	data, err := os.ReadFile(filepath.Join(cfg.NginxConfigDir, "app.conf"))
