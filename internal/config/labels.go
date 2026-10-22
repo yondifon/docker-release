@@ -11,7 +11,8 @@ import (
 
 var validUpstreamName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 var validRoutePath = regexp.MustCompile(`^/[a-zA-Z0-9._~/%-]*$`)
-var validNginxHost = regexp.MustCompile(`^[a-zA-Z0-9*._,-]+$`)
+var validNginxHost = regexp.MustCompile(`^[a-zA-Z0-9_](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9_])?$`)
+var validNginxSSLPath = regexp.MustCompile(`^/[a-zA-Z0-9/._+@%-]+$`)
 
 type Strategy string
 
@@ -80,6 +81,10 @@ func ParseLabels(labels map[string]string) (*ServiceConfig, error) {
 	if labels["release.enable"] != "true" {
 		return nil, fmt.Errorf("release.enable is not true")
 	}
+	redirect, err := parseNginxRedirect(labels["release.nginx.ssl.redirect"])
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &ServiceConfig{
 		Enabled:              true,
@@ -95,7 +100,7 @@ func ParseLabels(labels map[string]string) (*ServiceConfig, error) {
 		NginxPath:            getOr(labels, "release.nginx.path", ""),
 		NginxSSLCert:         getOr(labels, "release.nginx.ssl.cert", ""),
 		NginxSSLKey:          getOr(labels, "release.nginx.ssl.key", ""),
-		NginxSSLRedirect:     parseBoolOr(labels, "release.nginx.ssl.redirect", false),
+		NginxSSLRedirect:     redirect,
 		NginxKeepalive:       parseIntOr(labels, "release.nginx.keepalive", -1),
 		AngieService:         getOr(labels, "release.angie.service", ""),
 		AngieConfigDir:       getOr(labels, "release.angie.config_dir", ""),
@@ -229,12 +234,28 @@ func (c *ServiceConfig) validate() error {
 		return fmt.Errorf("release.nginx.path %q must start with / and contain only URL path characters", c.NginxPath)
 	}
 
-	if c.NginxHost != "" && !validNginxHost.MatchString(c.NginxHost) {
-		return fmt.Errorf("release.nginx.host %q contains invalid hostname characters", c.NginxHost)
+	if c.NginxHost != "" {
+		for _, host := range strings.Split(c.NginxHost, ",") {
+			host = strings.TrimSpace(host)
+			if strings.HasPrefix(host, "*.") {
+				host = strings.TrimPrefix(host, "*.")
+			} else {
+				host = strings.TrimSuffix(host, ".*")
+			}
+			if !validNginxHost.MatchString(host) || strings.Contains(host, "..") {
+				return fmt.Errorf("release.nginx.host %q must contain comma-separated hostnames, with wildcards only at an edge", c.NginxHost)
+			}
+		}
+	}
+	if c.NginxHost == "" && c.NginxPath == "/health" {
+		return fmt.Errorf("release.nginx.path /health is reserved; set a host or choose another path")
 	}
 
 	if (c.NginxSSLCert == "") != (c.NginxSSLKey == "") {
 		return fmt.Errorf("release.nginx.ssl.cert and release.nginx.ssl.key must be set together")
+	}
+	if c.NginxSSLCert != "" && c.NginxHost == "" {
+		return fmt.Errorf("release.nginx.ssl.cert requires release.nginx.host")
 	}
 
 	if c.NginxSSLRedirect && c.NginxSSLCert == "" {
@@ -245,11 +266,8 @@ func (c *ServiceConfig) validate() error {
 		if p == "" {
 			continue
 		}
-		if !strings.HasPrefix(p, "/") {
-			return fmt.Errorf("nginx ssl paths must be absolute")
-		}
-		if containsDotDot(p) || strings.ContainsAny(p, ";{}\n\r\t\"") {
-			return fmt.Errorf("nginx ssl paths contain invalid characters")
+		if containsDotDot(p) || !validNginxSSLPath.MatchString(p) {
+			return fmt.Errorf("nginx ssl paths must be absolute and contain only letters, numbers, /, ., _, +, @, %% or -")
 		}
 	}
 
@@ -337,19 +355,14 @@ func parseIntOr(labels map[string]string, key string, fallback int) int {
 	return n
 }
 
-func parseBoolOr(labels map[string]string, key string, fallback bool) bool {
-	v, ok := labels[key]
-	if !ok || v == "" {
-		return fallback
-	}
-
+func parseNginxRedirect(v string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
+		return true, nil
+	case "", "0", "false", "no", "off":
+		return false, nil
 	default:
-		return fallback
+		return false, fmt.Errorf("release.nginx.ssl.redirect %q is invalid; use true or false", v)
 	}
 }
 
