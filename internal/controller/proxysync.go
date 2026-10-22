@@ -14,44 +14,44 @@ import (
 	"github.com/malico/docker-release/internal/state"
 )
 
-type nginxConfigDirs struct {
+type proxyConfigDirs struct {
 	upstreams string
 	routes    string
 }
 
-func (c *Controller) cleanStaleNginxConfigs(ctx context.Context, configs map[string]*config.ServiceConfig) error {
+func (c *Controller) cleanStaleProxyConfigs(ctx context.Context, configs map[string]*config.ServiceConfig) error {
 	if c.project == "" {
 		return nil
 	}
-	if c.nginxConfigs == nil {
-		c.nginxConfigs = make(map[nginxConfigDirs]*config.ServiceConfig)
+	if c.proxyConfigs == nil {
+		c.proxyConfigs = make(map[proxyConfigDirs]*config.ServiceConfig)
 	}
 	active := make(map[string]bool)
 	for name, cfg := range configs {
 		active[filepath.Base(name)] = true
-		if cfg.Provider == config.ProviderNginx {
-			c.nginxConfigs[nginxConfigDirs{cfg.NginxConfigDir, cfg.NginxRouteDir}] = cfg
-		} else if cfg.Provider == config.ProviderAngie && cfg.AngieRouteDir != "" {
-			c.nginxConfigs[nginxConfigDirs{cfg.AngieConfigDir, cfg.AngieRouteDir}] = cfg
+		if dirs, transactional := transactionalProxyDirs(cfg); transactional {
+			c.proxyConfigs[dirs] = cfg
 		}
 	}
 	name := strings.ToLower(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")))
-	if name == "nginx" || name == "angie" {
+	if name == "nginx" || name == "angie" || name == "caddy" {
 		cfg, err := config.ParseLabels(map[string]string{"release.enable": "true", "release.provider": name})
 		if err != nil {
 			return err
 		}
-		dirs := nginxConfigDirs{cfg.NginxConfigDir, cfg.NginxRouteDir}
-		if name == "angie" {
-			dirs = nginxConfigDirs{cfg.AngieConfigDir, cfg.AngieRouteDir}
-		}
-		c.nginxConfigs[dirs] = cfg
+		dirs, _ := transactionalProxyDirs(cfg)
+		c.proxyConfigs[dirs] = cfg
 	}
 	var syncErr error
-	for _, cfg := range c.nginxConfigs {
-		p := provider.NewNginx(cfg.NginxConfigDir, cfg.NginxRouteDir, provider.NginxRoute{}, c.docker, cfg.NginxService, c.project)
+	for _, cfg := range c.proxyConfigs {
+		var p interface {
+			RemoveStaleConfigs(context.Context, map[string]bool, func(string) bool) error
+		}
+		p = provider.NewNginx(cfg.NginxConfigDir, cfg.NginxRouteDir, provider.NginxRoute{}, c.docker, cfg.NginxService, c.project)
 		if cfg.Provider == config.ProviderAngie {
 			p = provider.NewAngieRoutes(cfg.AngieConfigDir, cfg.AngieRouteDir, provider.NginxRoute{}, c.docker, cfg.AngieService, c.project)
+		} else if cfg.Provider == config.ProviderCaddy {
+			p = provider.NewCaddyRoutes(cfg.CaddyConfigDir, provider.CaddyRoute{}, c.docker, cfg.CaddyService, c.project)
 		}
 		opCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		var releases []func()
@@ -82,9 +82,23 @@ func (c *Controller) cleanStaleNginxConfigs(ctx context.Context, configs map[str
 		}
 		cancel()
 		if err != nil {
-			slog.Error("error removing stale nginx configs", "component", "controller", "err", err)
+			slog.Error("error removing stale proxy configs", "component", "controller", "err", err)
 			syncErr = errors.Join(syncErr, err)
 		}
 	}
 	return syncErr
+}
+
+func transactionalProxyDirs(cfg *config.ServiceConfig) (proxyConfigDirs, bool) {
+	switch cfg.Provider {
+	case config.ProviderNginx:
+		return proxyConfigDirs{cfg.NginxConfigDir, cfg.NginxRouteDir}, true
+	case config.ProviderAngie:
+		return proxyConfigDirs{cfg.AngieConfigDir, cfg.AngieRouteDir}, cfg.AngieRouteDir != ""
+	case config.ProviderCaddy:
+		bundled := strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "caddy")
+		return proxyConfigDirs{cfg.CaddyConfigDir, ""}, bundled
+	default:
+		return proxyConfigDirs{}, false
+	}
 }

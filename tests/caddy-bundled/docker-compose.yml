@@ -1,0 +1,37 @@
+services:
+  docker-release:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: docker-release
+    build:
+      dockerfile: dockerfiles/caddy.Dockerfile
+    image: docker-release-caddy:local
+    ports: !override
+      - "8091:80"
+      - "8444:443"
+
+  linear_app:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: linear_app
+
+  canary_app:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: canary_app
+
+  blue_green_app:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: blue_green_app
+
+  path_app:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: linear_app
+    labels:
+      release.host: ""
+      release.path: /path/
+
+volumes:
+  docker-release-state:

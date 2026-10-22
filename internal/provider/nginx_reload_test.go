@@ -238,7 +238,7 @@ func TestBundledStartupDoesNotAcceptDeploymentBeforeProxyIsReady(t *testing.T) {
 	if err := p.Reload(context.Background()); err == nil {
 		t.Fatal("deployment reported a successful reload before nginx started")
 	}
-	if err := p.Reload(WithNginxBootstrap(context.Background())); err != nil {
+	if err := p.Reload(WithProxyBootstrap(context.Background())); err != nil {
 		t.Fatalf("initial config could not be generated before nginx started: %v", err)
 	}
 }
