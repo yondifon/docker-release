@@ -1,3 +1,9 @@
+x-app: &app
+  build:
+    context: .
+    dockerfile: app.Dockerfile
+  image: docker-release-test-app:local
+
 services:
   docker-release:
     build:
@@ -15,10 +21,7 @@ services:
       - "8089:80"
 
   linear_app:
-    build:
-      context: .
-      dockerfile: app.Dockerfile
-    image: docker-release-test-app:local
+    <<: *app
     environment:
       - WHOAMI_NAME=linear
     labels:
@@ -30,10 +33,7 @@ services:
       - "release.drain_timeout=5s"
 
   canary_app:
-    image: docker-release-test-app:local
-    depends_on:
-      linear_app:
-        condition: service_started
+    <<: *app
     environment:
       - WHOAMI_NAME=canary
     labels:
@@ -48,10 +48,7 @@ services:
       - "release.health_check_timeout=20s"
 
   blue_green_app:
-    image: docker-release-test-app:local
-    depends_on:
-      linear_app:
-        condition: service_started
+    <<: *app
     environment:
       - WHOAMI_NAME=blue_green
     labels:
