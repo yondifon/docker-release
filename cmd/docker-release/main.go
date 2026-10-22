@@ -93,7 +93,7 @@ func main() {
 			return ctrl.Status(context.Background(), opts.project, opts.service)
 		})
 	case "healthcheck":
-		if !health.IsReady() {
+		if !health.IsReady() || !bundledProxyHealthy() {
 			os.Exit(1)
 		}
 	case "version":

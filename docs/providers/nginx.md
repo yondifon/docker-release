@@ -2,7 +2,7 @@
 
 Use this when you run Nginx and control its config.
 
-`docker-release` writes upstream files to a shared volume and reloads Nginx after each deploy. You write the `server` block and `location` rules — `docker-release` only manages the `upstream` blocks.
+`docker-release` writes upstream files and reloads Nginx after each deploy. With a separate Nginx service, you supply the `server` and `location` rules. The bundled image can generate those rules from labels.
 
 ## What Gets Written
 
@@ -58,7 +58,7 @@ volumes:
   nginx-config:
 ```
 
-## Bundled Image (Draft)
+## Bundled Image
 
 Use `malico/docker-release-nginx` when you want one service instead of a controller sidecar plus a separate Nginx service.
 
@@ -66,6 +66,9 @@ Use `malico/docker-release-nginx` when you want one service instead of a control
 services:
   docker-release:
     image: malico/docker-release-nginx:latest
+    ports:
+      - "80:80"
+    stop_grace_period: 90s
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - docker-release-state:/var/lib/docker-release
@@ -88,17 +91,16 @@ volumes:
 
 `docker-release-nginx` sets `DR_DEFAULT_PROVIDER=nginx`, so app services can omit `release.provider`. Explicit `release.provider` labels still win.
 
-The base `malico/docker-release` image does not include bundled Nginx runtime code. This image overlays a `dr` binary built with the `bundled_nginx` tag.
-
-Publish ports only when this container should receive traffic directly:
+Omit published ports if another proxy connects to this container over the Compose network. Publish port 443 only when you configure TLS:
 
 ```yaml
 ports:
-  - "80:80"
   - "443:443"
 ```
 
-Each app can have its own host and certs, like nginx-proxy's `VIRTUAL_HOST` model:
+Give each service a different host. You can set several comma-separated hosts for one service. Do not assign the same host to separate services; use your own server block for several paths on one host.
+
+Add the certificate mount and TLS labels to the Compose setup above:
 
 ```yaml
 services:
@@ -133,7 +135,17 @@ Custom config paths:
 | `/etc/docker-release/nginx/https.d/*.conf` | custom snippets inside the generated HTTPS server after routes |
 | `/etc/nginx/nginx.conf` | full bundled config override; set `DR_NGINX_SKIP_CONFIG=true` |
 
-The bundled image waits for initial upstream and route files before starting Nginx. This lets custom mounted config reference generated upstreams like `app_upstream` on first boot.
+The container becomes healthy only after its initial config is ready and Nginx responds at `/health`. A full config override must serve HTTP 200 at `http://127.0.0.1/health` without a redirect.
+
+`release.nginx.host` defaults to path `/` when no path is set. A path without a host adds a route to the default HTTP server. `/health` is reserved there. Each generated path removes its prefix before forwarding: `/app/orders` at path `/app/` reaches your app as `/orders`.
+
+Nginx checks each config change before reloading. If it rejects a change, the previous files are restored and the deployment fails. Check the Nginx logs, labels, and mounted certificates before trying again.
+
+Keep generated config directories writable and use the same directories for all services sharing this Nginx instance. The default config includes only the paths listed above; changing directory labels also needs a matching config override.
+
+The Nginx master and controller run as root to access the Docker socket and ports 80/443. Nginx workers run as `nginx`. Mounting the Docker socket grants control of the Docker host; use this image only for trusted services.
+
+Restarting the bundled service also restarts Nginx. App releases do not restart it.
 
 ## Nginx Config
 

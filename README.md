@@ -15,7 +15,7 @@ Your proxy still serves all traffic. `docker-release` only manages the container
 | Image | Use |
 |---|---|
 | `malico/docker-release` | controller-only sidecar |
-| `malico/docker-release-nginx` | draft bundled Nginx + controller |
+| `malico/docker-release-nginx` | bundled Nginx + controller; [setup](docs/providers/nginx.md#bundled-image) |
 
 ## Pick Your Proxy
 

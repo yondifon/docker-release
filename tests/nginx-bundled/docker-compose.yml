@@ -4,18 +4,21 @@ services:
       context: ../../
       dockerfile: dockerfiles/nginx.Dockerfile
       args:
-        BASE_IMAGE: docker-release:local
         VERSION: local
     image: docker-release-nginx:local
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - docker-release-state:/var/lib/docker-release:rw
     command: ["watch"]
+    stop_grace_period: 90s
     ports:
       - "8089:80"
 
   linear_app:
-    image: traefik/whoami
+    build:
+      context: .
+      dockerfile: app.Dockerfile
+    image: docker-release-test-app:local
     environment:
       - WHOAMI_NAME=linear
     labels:
@@ -27,7 +30,10 @@ services:
       - "release.drain_timeout=5s"
 
   canary_app:
-    image: traefik/whoami
+    image: docker-release-test-app:local
+    depends_on:
+      linear_app:
+        condition: service_started
     environment:
       - WHOAMI_NAME=canary
     labels:
@@ -42,7 +48,10 @@ services:
       - "release.health_check_timeout=20s"
 
   blue_green_app:
-    image: traefik/whoami
+    image: docker-release-test-app:local
+    depends_on:
+      linear_app:
+        condition: service_started
     environment:
       - WHOAMI_NAME=blue_green
     labels:

@@ -196,7 +196,8 @@ func (c *Client) findContainerByImage(ctx context.Context, project, keyword stri
 		if strings.ToLower(ctr.Labels[bundledProxyLabel]) == kw {
 			return ctr, nil
 		}
-
+	}
+	for _, ctr := range containers {
 		if ctr.Labels[imageTitleLabel] == "docker-release" {
 			continue
 		}

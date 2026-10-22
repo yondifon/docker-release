@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -37,23 +38,39 @@ func runWithBundledProxy(ctx context.Context, proxy *bundledProxy, run func(cont
 	if proxy == nil {
 		return run(ctx)
 	}
-
-	_ = health.ClearReady()
-	_ = clearBundledProxyStarted(proxy)
-	if err := prepareBundledProxyConfig(proxy); err != nil {
+	if err := health.ClearReady(); err != nil {
 		return err
 	}
+	if err := clearBundledProxyStarted(proxy); err != nil {
+		return err
+	}
+	defer health.ClearReady()
+	defer clearBundledProxyStarted(proxy)
+	if err := prepareBundledNginxConfig(); err != nil {
+		return err
+	}
+	return superviseBundledProxy(ctx, proxy, run, health.IsReady, nginxResponding, func(context.Context) error {
+		return markBundledProxyStarted(proxy)
+	})
+}
 
+func superviseBundledProxy(ctx context.Context, proxy *bundledProxy, run func(context.Context) error, configsReady func() bool, proxyReady func(context.Context) bool, started func(context.Context) error) (result error) {
 	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	controllerErr := make(chan error, 1)
+	controllerDone := make(chan struct{})
+	var controllerErr error
 	go func() {
-		controllerErr <- run(runCtx)
+		controllerErr = run(runCtx)
+		close(controllerDone)
+	}()
+	defer func() {
+		cancel()
+		<-controllerDone
+		if controllerErr != nil && !errors.Is(controllerErr, context.Canceled) {
+			result = errors.Join(result, controllerErr)
+		}
 	}()
 
-	if err := waitForInitialConfigs(ctx, controllerErr); err != nil {
-		cancel()
+	if err := waitForInitialConfigs(ctx, controllerDone, configsReady); err != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -64,50 +81,78 @@ func runWithBundledProxy(ctx context.Context, proxy *bundledProxy, run func(cont
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		cancel()
 		return fmt.Errorf("starting bundled %s: %w", proxy.name, err)
 	}
-	if err := markBundledProxyStarted(proxy); err != nil {
+	proxyDone := make(chan struct{})
+	var proxyErr error
+	go func() {
+		proxyErr = cmd.Wait()
+		close(proxyDone)
+	}()
+	defer func() {
 		cancel()
-		stopBundledProxy(cmd, proxy, nil)
+		<-controllerDone
+		stopBundledProxy(cmd, proxyDone)
+		if proxyErr != nil {
+			result = errors.Join(result, fmt.Errorf("bundled %s: %w", proxy.name, proxyErr))
+		}
+	}()
+
+	if err := waitForBundledNginx(ctx, controllerDone, proxyDone, proxyReady); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	if err := started(runCtx); err != nil {
 		return err
 	}
 	slog.Info("started bundled proxy", "component", "main", "proxy", proxy.name)
-
-	proxyErr := make(chan error, 1)
-	go func() {
-		proxyErr <- cmd.Wait()
-	}()
-
 	select {
-	case err := <-controllerErr:
-		cancel()
-		stopBundledProxy(cmd, proxy, proxyErr)
-		return err
-	case err := <-proxyErr:
-		cancel()
-		<-controllerErr
-		if err != nil {
-			return fmt.Errorf("bundled %s exited: %w", proxy.name, err)
+	case <-controllerDone:
+		if controllerErr == nil && ctx.Err() == nil {
+			return fmt.Errorf("controller exited while bundled proxy was running")
 		}
+		return nil
+	case <-proxyDone:
 		return fmt.Errorf("bundled %s exited", proxy.name)
 	case <-ctx.Done():
-		cancel()
-		stopBundledProxy(cmd, proxy, proxyErr)
-		if err := <-controllerErr; err != nil {
-			return err
-		}
 		return nil
 	}
 }
 
-func prepareBundledProxyConfig(proxy *bundledProxy) error {
-	switch proxy.name {
-	case "nginx":
-		return prepareBundledNginxConfig()
-	default:
-		return nil
+func waitForInitialConfigs(ctx context.Context, controllerDone <-chan struct{}, ready func() bool) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for !ready() {
+		select {
+		case <-controllerDone:
+			return fmt.Errorf("controller exited before bundled proxy started")
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
+	return nil
+}
+
+func waitForBundledNginx(ctx context.Context, controllerDone, proxyDone <-chan struct{}, ready func(context.Context) bool) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for !ready(ctx) {
+		select {
+		case <-proxyDone:
+			return fmt.Errorf("bundled nginx exited before accepting traffic; check the nginx logs")
+		case <-controllerDone:
+			return fmt.Errorf("controller exited before bundled nginx was ready")
+		case <-ctx.Done():
+			return fmt.Errorf("bundled nginx did not respond at /health; check its HTTP health route: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+	return nil
 }
 
 func bundledProxyStartedPath(proxy *bundledProxy) string {
@@ -130,58 +175,17 @@ func markBundledProxyStarted(proxy *bundledProxy) error {
 	return os.WriteFile(path, nil, 0o644)
 }
 
-func waitForInitialConfigs(ctx context.Context, controllerErr <-chan error) error {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		if health.IsReady() {
-			return nil
-		}
-
-		select {
-		case err := <-controllerErr:
-			if err != nil {
-				return err
-			}
-			return fmt.Errorf("controller exited before bundled proxy started")
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
-func stopBundledProxy(cmd *exec.Cmd, proxy *bundledProxy, proxyErr <-chan error) {
-	if cmd.Process == nil {
-		return
-	}
-
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		slog.Warn("could not stop bundled proxy", "component", "main", "proxy", proxy.name, "err", err)
-		return
-	}
-
-	if proxyErr == nil {
-		done := make(chan struct{})
-		go func() {
-			_ = cmd.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			_ = cmd.Process.Kill()
-			<-done
-		}
-		return
-	}
-
+func stopBundledProxy(cmd *exec.Cmd, done <-chan struct{}) {
 	select {
-	case <-proxyErr:
+	case <-done:
 		return
-	case <-time.After(5 * time.Second):
+	default:
+	}
+	_ = cmd.Process.Signal(syscall.SIGQUIT)
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
 		_ = cmd.Process.Kill()
-		<-proxyErr
+		<-done
 	}
 }

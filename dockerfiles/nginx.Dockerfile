@@ -1,16 +1,16 @@
-ARG BASE_IMAGE=malico/docker-release:latest
-
-FROM golang:1.24-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 ARG VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -tags bundled_nginx -ldflags="-s -w -X main.version=${VERSION}" -o /bin/dr ./cmd/docker-release/
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags bundled_nginx -ldflags="-s -w -X main.version=${VERSION}" -o /bin/dr ./cmd/docker-release/
 
-FROM ${BASE_IMAGE}
+FROM alpine:3.23 AS runtime
 
-RUN apk add --no-cache nginx \
+RUN apk add --no-cache ca-certificates nginx tini \
   && mkdir -p /run/nginx /shared/nginx-config /shared/nginx-routes \
     /etc/docker-release/nginx/conf.d /etc/docker-release/nginx/http.d \
     /etc/docker-release/nginx/server.d /etc/docker-release/nginx/ssl.d \
@@ -28,5 +28,5 @@ ENV DR_BUNDLED_PROXY=nginx \
 EXPOSE 80 443 9080 9081
 HEALTHCHECK --interval=5s --timeout=2s --start-period=30s --retries=6 \
   CMD ["dr", "healthcheck"]
-ENTRYPOINT ["dr"]
+ENTRYPOINT ["/sbin/tini", "--", "dr"]
 CMD ["watch"]

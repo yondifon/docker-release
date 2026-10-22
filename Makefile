@@ -22,7 +22,6 @@ build-regular:
 build-nginx:
 	docker build \
 		-f dockerfiles/nginx.Dockerfile \
-		--build-arg BASE_IMAGE=$(IMAGE):$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		-t $(NGINX_IMAGE):$(VERSION) \
 		-t $(NGINX_IMAGE):latest \
@@ -97,7 +96,6 @@ else
 		--builder docker-release-builder \
 		--platform linux/amd64,linux/arm64 \
 		-f dockerfiles/nginx.Dockerfile \
-		--build-arg BASE_IMAGE=$(IMAGE):$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		-t $(NGINX_IMAGE):$(VERSION) \
 		-t $(NGINX_IMAGE):latest \
@@ -129,7 +127,6 @@ up-nginx:
 	docker compose -f tests/nginx/docker-compose.yml up --build
 
 up-nginx-bundled:
-	$(MAKE) build-regular IMAGE=docker-release VERSION=local
 	docker compose -f tests/nginx-bundled/docker-compose.yml up --build
 
 up-angie:

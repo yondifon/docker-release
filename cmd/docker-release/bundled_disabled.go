@@ -24,3 +24,5 @@ func bundledProxyFromEnv() (*bundledProxy, error) {
 func runWithBundledProxy(ctx context.Context, _ *bundledProxy, run func(context.Context) error) error {
 	return run(ctx)
 }
+
+func bundledProxyHealthy() bool { return true }

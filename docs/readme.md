@@ -19,11 +19,9 @@ It never touches traffic directly. Your proxy — nginx-proxy, Nginx, Caddy, Tra
 | Image | Use |
 |---|---|
 | `malico/docker-release` | controller-only sidecar; bring your own proxy service |
-| `malico/docker-release-nginx` | draft bundled Nginx + controller image |
+| `malico/docker-release-nginx` | bundled Nginx + controller; [setup](providers/nginx.md#bundled-image) |
 
-The bundled Nginx image keeps the same `dr` entrypoint, so `docker release help` and all host plugin commands still work.
-
-The controller-only image is built without bundled proxy code. Bundled images overlay a `dr` binary built with the provider-specific build tag, so dormant proxy code does not ship in the default runtime.
+Both images support the same `docker release` commands.
 
 ## Deploy Strategies
 
@@ -97,7 +95,7 @@ release.affinity: cookie  # sticky sessions (Angie, Caddy, HAProxy, Traefik only
 | `release.affinity` | `ip` | Session affinity: `ip`, `cookie`, or empty |
 | `release.upstream` | service name | Override the upstream name used in proxy config |
 
-`DR_DEFAULT_PROVIDER` can set the provider default for a controller image. `malico/docker-release-nginx` sets it to `nginx`, so managed app services only need `release.enable: "true"` unless they need an override.
+`DR_DEFAULT_PROVIDER` sets the provider default. The bundled Nginx image sets it to `nginx`; add `release.nginx.host` or `release.nginx.path` to expose a managed service.
 
 ### Strategy Labels
 
