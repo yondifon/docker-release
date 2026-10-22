@@ -93,7 +93,7 @@ func main() {
 			return ctrl.Status(context.Background(), opts.project, opts.service)
 		})
 	case "healthcheck":
-		if !health.IsReady() {
+		if !health.IsReady() || !bundledProxyHealthy() {
 			os.Exit(1)
 		}
 	case "version":
@@ -234,6 +234,17 @@ func cmdWatch(ctrl *controller.Controller) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	proxy, err := bundledProxyFromEnv()
+	if err != nil {
+		return err
+	}
+
+	return runWithBundledProxy(ctx, proxy, func(ctx context.Context) error {
+		return runWatch(ctx, ctrl)
+	})
+}
+
+func runWatch(ctx context.Context, ctrl *controller.Controller) error {
 	cfg := server.ConfigFromEnv()
 	cfg.Version = version
 	if cfg.APIEnabled || cfg.WebEnabled {

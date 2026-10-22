@@ -104,3 +104,36 @@ func TestClearReadyRemovesManifest(t *testing.T) {
 		t.Fatal("manifest should be removed by ClearReady")
 	}
 }
+
+func TestRemovingGeneratedRouteDoesNotLeaveHealthPermanentlyUnready(t *testing.T) {
+	setup(t)
+	old := filepath.Join(t.TempDir(), "app.location")
+	if err := os.WriteFile(old, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	RecordFile(old)
+	RecordFile(old)
+	if err := MarkReady(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(old); err != nil {
+		t.Fatal(err)
+	}
+	ForgetFile(old)
+	if !IsReady() {
+		t.Fatal("removing a generated route left health permanently unready")
+	}
+}
+
+func TestHealthDoesNotIgnoreUnreadableManifest(t *testing.T) {
+	setup(t)
+	if err := MarkReady(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(manifestPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if IsReady() {
+		t.Fatal("health ignored an unreadable config manifest")
+	}
+}

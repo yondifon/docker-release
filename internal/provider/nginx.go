@@ -8,19 +8,38 @@ import (
 	"strings"
 
 	"github.com/malico/docker-release/internal/docker"
-	"github.com/malico/docker-release/internal/health"
 )
 
 type NginxProvider struct {
-	configDir   string
+	configDir string
+	routeDir  string
+	route     NginxRoute
+
 	docker      *docker.Client
 	serviceName string
 	project     string
+	pending     map[string][]byte
 }
 
-func NewNginx(configDir string, dockerClient *docker.Client, serviceName, project string) *NginxProvider {
+type NginxRoute struct {
+	Host        string
+	Path        string
+	SSLCert     string
+	SSLKey      string
+	SSLRedirect bool
+}
+
+type nginxBootstrapKey struct{}
+
+func WithNginxBootstrap(ctx context.Context) context.Context {
+	return context.WithValue(ctx, nginxBootstrapKey{}, true)
+}
+
+func NewNginx(configDir, routeDir string, route NginxRoute, dockerClient *docker.Client, serviceName, project string) *NginxProvider {
 	return &NginxProvider{
 		configDir:   configDir,
+		routeDir:    routeDir,
+		route:       route,
 		docker:      dockerClient,
 		serviceName: serviceName,
 		project:     project,
@@ -32,34 +51,47 @@ func (p *NginxProvider) GenerateConfig(ctx context.Context, state *UpstreamState
 		return err
 	}
 
-	conf := renderUpstream(state)
-
-	if err := os.MkdirAll(p.configDir, 0o755); err != nil {
-		return fmt.Errorf("creating config dir: %w", err)
+	// Keep candidates off disk until the lock covers validation and reload.
+	p.pending = map[string][]byte{
+		filepath.Join(p.configDir, state.Service+".conf"): []byte(renderUpstream(state)),
 	}
-
-	path := filepath.Join(p.configDir, state.Service+".conf")
-	tmp := path + ".tmp"
-
-	if err := os.WriteFile(tmp, []byte(conf), 0o644); err != nil {
-		return fmt.Errorf("writing config: %w", err)
+	if p.routeDir == "" {
+		return nil
 	}
-
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("renaming config: %w", err)
+	serverPath := filepath.Join(p.routeDir, state.Service+".server")
+	locationPath := filepath.Join(p.routeDir, state.Service+".location")
+	p.pending[serverPath] = nil
+	p.pending[locationPath] = nil
+	if p.route.Host != "" {
+		p.pending[serverPath] = []byte(renderNginxServer(state, p.route))
+	} else if p.route.Path != "" {
+		p.pending[locationPath] = []byte(renderNginxLocation(state, p.route))
 	}
-
-	health.RecordFile(path)
 	return nil
 }
 
 func (p *NginxProvider) Reload(ctx context.Context) error {
+	return p.applyConfigs(ctx, p.pending)
+}
+
+func (p *NginxProvider) reload(ctx context.Context) error {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "nginx") {
+		if _, err := os.Stat("/run/docker-release/nginx.started"); os.IsNotExist(err) {
+			if bootstrap, _ := ctx.Value(nginxBootstrapKey{}).(bool); bootstrap {
+				return nil
+			}
+			return fmt.Errorf("bundled nginx is not ready; wait until the container is healthy before deploying")
+		} else if err != nil {
+			return err
+		}
+	}
+
 	ctr, running, err := resolveProxyContainer(ctx, p.docker, p.project, p.serviceName, "nginx")
 	if err != nil {
 		return fmt.Errorf("resolving nginx container: %w", err)
 	}
 
-	if !matchesImage(ctr.Image, "nginx", "alpine") {
+	if ctr.Labels["com.malico.docker-release.bundled-proxy"] != "nginx" && !matchesImage(ctr.Image, "nginx", "alpine") {
 		return fmt.Errorf("container %q has unexpected image %q (want nginx or alpine-based)", ctr.ID[:12], ctr.Image)
 	}
 
@@ -67,7 +99,16 @@ func (p *NginxProvider) Reload(ctx context.Context) error {
 		return p.docker.Start(ctx, ctr.ID)
 	}
 
-	return p.docker.Exec(ctx, ctr.ID, []string{"/usr/sbin/nginx", "-s", "reload"})
+	if err := p.docker.Exec(ctx, ctr.ID, []string{"/usr/sbin/nginx", "-t"}); err != nil {
+		return fmt.Errorf("nginx rejected config; check its config and certificates: %w", err)
+	}
+	reload := func() error {
+		return p.docker.Exec(ctx, ctr.ID, []string{"/usr/sbin/nginx", "-s", "reload"})
+	}
+	if ctr.Labels["com.malico.docker-release.bundled-proxy"] == "nginx" {
+		return confirmBundledNginxReload(ctx, reload)
+	}
+	return reload()
 }
 
 func renderUpstream(state *UpstreamState) string {
@@ -99,6 +140,9 @@ func renderUpstream(state *UpstreamState) string {
 
 		fmt.Fprintf(&b, ";\n")
 	}
+	if len(state.Servers) == 0 {
+		fmt.Fprintf(&b, "    server 127.0.0.1:1 down;\n")
+	}
 
 	if state.Keepalive > 0 {
 		fmt.Fprintf(&b, "    keepalive %d;\n", state.Keepalive)
@@ -107,4 +151,78 @@ func renderUpstream(state *UpstreamState) string {
 	fmt.Fprintf(&b, "}\n")
 
 	return b.String()
+}
+
+func renderNginxServer(state *UpstreamState, route NginxRoute) string {
+	var b strings.Builder
+
+	if route.SSLCert != "" {
+		renderNginxServerBlock(&b, state, route, false, route.SSLRedirect)
+		b.WriteString("\n")
+		renderNginxServerBlock(&b, state, route, true, false)
+		return b.String()
+	}
+
+	renderNginxServerBlock(&b, state, route, false, false)
+	return b.String()
+}
+
+func renderNginxServerBlock(b *strings.Builder, state *UpstreamState, route NginxRoute, ssl, redirectOnly bool) {
+	fmt.Fprintf(b, "# Generated by docker-release\n")
+	fmt.Fprintf(b, "server {\n")
+	if ssl {
+		fmt.Fprintf(b, "    listen 443 ssl;\n")
+	} else {
+		fmt.Fprintf(b, "    listen 80;\n")
+	}
+	fmt.Fprintf(b, "    server_name %s;\n", normalizeNginxHost(route.Host))
+
+	if ssl {
+		fmt.Fprintf(b, "    ssl_certificate %s;\n", route.SSLCert)
+		fmt.Fprintf(b, "    ssl_certificate_key %s;\n", route.SSLKey)
+		fmt.Fprintf(b, "    include /etc/docker-release/nginx/ssl.d/*.conf;\n")
+	}
+
+	fmt.Fprintf(b, "\n")
+	if redirectOnly {
+		fmt.Fprintf(b, "    location / {\n")
+		fmt.Fprintf(b, "        return 308 https://$host$request_uri;\n")
+		fmt.Fprintf(b, "    }\n")
+		fmt.Fprintf(b, "}\n")
+		return
+	}
+
+	for _, line := range strings.Split(strings.TrimSuffix(renderNginxLocation(state, route), "\n"), "\n") {
+		fmt.Fprintf(b, "    %s\n", line)
+	}
+	fmt.Fprintf(b, "    include /etc/docker-release/nginx/server.d/*.conf;\n")
+	if ssl {
+		fmt.Fprintf(b, "    include /etc/docker-release/nginx/https.d/*.conf;\n")
+	}
+	fmt.Fprintf(b, "}\n")
+}
+
+func renderNginxLocation(state *UpstreamState, route NginxRoute) string {
+	var b strings.Builder
+	path := route.Path
+	if path == "" {
+		path = "/"
+	}
+
+	fmt.Fprintf(&b, "# Generated by docker-release\n")
+	fmt.Fprintf(&b, "location %s {\n", path)
+	fmt.Fprintf(&b, "    proxy_set_header Host $host;\n")
+	fmt.Fprintf(&b, "    proxy_set_header X-Real-IP $remote_addr;\n")
+	fmt.Fprintf(&b, "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
+	fmt.Fprintf(&b, "    proxy_set_header X-Forwarded-Proto $scheme;\n")
+	fmt.Fprintf(&b, "    proxy_http_version 1.1;\n")
+	fmt.Fprintf(&b, "    proxy_set_header Connection \"\";\n")
+	fmt.Fprintf(&b, "    proxy_pass http://%s_upstream/;\n", state.ResolveUpstreamName())
+	fmt.Fprintf(&b, "}\n")
+
+	return b.String()
+}
+
+func normalizeNginxHost(host string) string {
+	return strings.Join(strings.FieldsFunc(host, func(r rune) bool { return r == ',' }), " ")
 }

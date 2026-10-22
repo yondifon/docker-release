@@ -27,6 +27,7 @@ coverage.out
 # Repo-local scratch/vendor comparisons
 docker-autoheal/
 docker-rollout/
+.oga_tmp/
 idea.md
 
 # Not needed to build the controller image
