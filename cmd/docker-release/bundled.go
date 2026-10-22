@@ -1,4 +1,4 @@
-//go:build bundled_nginx
+//go:build bundled_nginx || bundled_angie
 
 package main
 
@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,9 +19,11 @@ import (
 )
 
 type bundledProxy struct {
-	name string
-	args []string
-	pid  int
+	name       string
+	args       []string
+	pid        int
+	configPath string
+	config     []byte
 }
 
 func bundledProxyFromEnv() (*bundledProxy, error) {
@@ -28,8 +31,13 @@ func bundledProxyFromEnv() (*bundledProxy, error) {
 	switch v {
 	case "", "none":
 		return nil, nil
-	case "nginx":
-		return &bundledProxy{name: "nginx", args: []string{"nginx", "-g", "daemon off;"}}, nil
+	case bundledProxyName:
+		return &bundledProxy{
+			name:       v,
+			args:       []string{v, "-g", "daemon off;"},
+			configPath: bundledConfigPath,
+			config:     bundledConfig,
+		}, nil
 	default:
 		return nil, fmt.Errorf("unknown DR_BUNDLED_PROXY %q", os.Getenv("DR_BUNDLED_PROXY"))
 	}
@@ -47,10 +55,16 @@ func runWithBundledProxy(ctx context.Context, proxy *bundledProxy, run func(cont
 	}
 	defer health.ClearReady()
 	defer clearBundledProxyStarted(proxy)
-	if err := prepareBundledNginxConfig(); err != nil {
-		return err
+	skip, set := os.LookupEnv("DR_PROXY_SKIP_CONFIG")
+	if !set && proxy.name == "nginx" {
+		skip = os.Getenv("DR_NGINX_SKIP_CONFIG")
 	}
-	return superviseBundledProxy(ctx, proxy, run, health.IsReady, nginxResponding, func(context.Context) error {
+	if !truthy(skip) {
+		if err := os.WriteFile(proxy.configPath, proxy.config, 0o644); err != nil {
+			return err
+		}
+	}
+	return superviseBundledProxy(ctx, proxy, run, health.IsReady, proxyResponding, func(context.Context) error {
 		return markBundledProxyStarted(proxy)
 	})
 }
@@ -100,7 +114,7 @@ func superviseBundledProxy(ctx context.Context, proxy *bundledProxy, run func(co
 		}
 	}()
 
-	if err := waitForBundledNginx(ctx, controllerDone, proxyDone, proxyReady); err != nil {
+	if err := waitForBundledProxy(ctx, proxy.name, controllerDone, proxyDone, proxyReady); err != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -138,7 +152,7 @@ func waitForInitialConfigs(ctx context.Context, controllerDone <-chan struct{}, 
 	return nil
 }
 
-func waitForBundledNginx(ctx context.Context, controllerDone, proxyDone <-chan struct{}, ready func(context.Context) bool) error {
+func waitForBundledProxy(ctx context.Context, name string, controllerDone, proxyDone <-chan struct{}, ready func(context.Context) bool) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -146,11 +160,11 @@ func waitForBundledNginx(ctx context.Context, controllerDone, proxyDone <-chan s
 	for !ready(ctx) {
 		select {
 		case <-proxyDone:
-			return fmt.Errorf("bundled nginx exited before accepting traffic; check the nginx logs")
+			return fmt.Errorf("bundled %s exited before accepting traffic; check the proxy logs", name)
 		case <-controllerDone:
-			return fmt.Errorf("controller exited before bundled nginx was ready")
+			return fmt.Errorf("controller exited before bundled %s was ready", name)
 		case <-ctx.Done():
-			return fmt.Errorf("bundled nginx did not respond at /health; check its HTTP health route: %w", ctx.Err())
+			return fmt.Errorf("bundled %s did not respond at /health; check its HTTP health route: %w", name, ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -189,5 +203,50 @@ func stopBundledProxy(cmd *exec.Cmd, done <-chan struct{}) {
 	case <-time.After(30 * time.Second):
 		_ = cmd.Process.Kill()
 		<-done
+	}
+}
+
+func bundledProxyHealthy() bool {
+	proxy, err := bundledProxyFromEnv()
+	if err != nil {
+		return false
+	}
+	if proxy == nil {
+		return true
+	}
+	if _, err := os.Stat(bundledProxyStartedPath(proxy)); err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return proxyResponding(ctx)
+}
+
+func proxyResponding(ctx context.Context) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/health", nil)
+	if err != nil {
+		return false
+	}
+	client := &http.Client{
+		Transport: &http.Transport{Proxy: nil},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+func truthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }

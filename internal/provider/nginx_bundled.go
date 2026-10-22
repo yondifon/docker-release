@@ -1,4 +1,4 @@
-//go:build bundled_nginx
+//go:build bundled_nginx || bundled_angie
 
 package provider
 
@@ -12,37 +12,37 @@ import (
 	"time"
 )
 
-func confirmBundledNginxReload(ctx context.Context, reload func() error) error {
-	if !strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "nginx") {
+func confirmBundledReload(ctx context.Context, name string, reload func() error) error {
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), name) {
 		return reload()
 	}
-	data, err := os.ReadFile("/run/docker-release/nginx.started")
+	data, err := os.ReadFile("/run/docker-release/" + name + ".started")
 	if err != nil {
-		return fmt.Errorf("reading bundled nginx process: %w", err)
+		return fmt.Errorf("reading bundled %s process: %w", name, err)
 	}
 	pid := strings.TrimSpace(string(data))
 	if number, err := strconv.Atoi(pid); err != nil || number < 1 {
-		return fmt.Errorf("bundled nginx process is unknown; restart the controller")
+		return fmt.Errorf("bundled %s process is unknown; restart the controller", name)
 	}
-	// `nginx -s reload` returns before the master applies the config.
-	before, err := nginxWorkers(pid)
+	// `nginx -s reload` and `angie -s reload` return before the config is applied.
+	before, err := proxyWorkers(name, pid)
 	if err != nil {
 		return err
 	}
 	if len(before) == 0 {
-		return fmt.Errorf("bundled nginx has no workers; keep master_process enabled in its config")
+		return fmt.Errorf("bundled %s has no workers; keep master_process enabled in its config", name)
 	}
 	if err := reload(); err != nil {
 		return err
 	}
-	return waitForNginxWorkers(ctx, pid, before)
+	return waitForProxyWorkers(ctx, name, pid, before)
 }
 
-func nginxWorkers(pid string) (map[string]bool, error) {
+func proxyWorkers(name, pid string) (map[string]bool, error) {
 	path := filepath.Join("/proc", pid, "task", pid, "children")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading bundled nginx workers: %w", err)
+		return nil, fmt.Errorf("reading bundled %s workers: %w", name, err)
 	}
 	children := make(map[string]bool)
 	for _, child := range strings.Fields(string(data)) {
@@ -51,22 +51,22 @@ func nginxWorkers(pid string) (map[string]bool, error) {
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("reading bundled nginx worker %s: %w", child, err)
+			return nil, fmt.Errorf("reading bundled %s worker %s: %w", name, child, err)
 		}
-		if strings.HasPrefix(string(command), "nginx: worker process") {
+		if strings.HasPrefix(string(command), name+": worker process") {
 			children[child] = true
 		}
 	}
 	return children, nil
 }
 
-func waitForNginxWorkers(ctx context.Context, pid string, before map[string]bool) error {
+func waitForProxyWorkers(ctx context.Context, name, pid string, before map[string]bool) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		after, err := nginxWorkers(pid)
+		after, err := proxyWorkers(name, pid)
 		if err != nil {
 			return err
 		}
@@ -77,7 +77,7 @@ func waitForNginxWorkers(ctx context.Context, pid string, before map[string]bool
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("nginx did not accept the reload; check the nginx logs: %w", ctx.Err())
+			return fmt.Errorf("%s did not accept the reload; check the proxy logs: %w", name, ctx.Err())
 		case <-ticker.C:
 		}
 	}

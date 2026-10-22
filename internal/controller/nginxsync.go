@@ -31,15 +31,28 @@ func (c *Controller) cleanStaleNginxConfigs(ctx context.Context, configs map[str
 		active[filepath.Base(name)] = true
 		if cfg.Provider == config.ProviderNginx {
 			c.nginxConfigs[nginxConfigDirs{cfg.NginxConfigDir, cfg.NginxRouteDir}] = cfg
+		} else if cfg.Provider == config.ProviderAngie && cfg.AngieRouteDir != "" {
+			c.nginxConfigs[nginxConfigDirs{cfg.AngieConfigDir, cfg.AngieRouteDir}] = cfg
 		}
 	}
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "nginx") {
-		cfg, _ := config.ParseLabels(map[string]string{"release.enable": "true", "release.provider": "nginx"})
-		c.nginxConfigs[nginxConfigDirs{cfg.NginxConfigDir, cfg.NginxRouteDir}] = cfg
+	name := strings.ToLower(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")))
+	if name == "nginx" || name == "angie" {
+		cfg, err := config.ParseLabels(map[string]string{"release.enable": "true", "release.provider": name})
+		if err != nil {
+			return err
+		}
+		dirs := nginxConfigDirs{cfg.NginxConfigDir, cfg.NginxRouteDir}
+		if name == "angie" {
+			dirs = nginxConfigDirs{cfg.AngieConfigDir, cfg.AngieRouteDir}
+		}
+		c.nginxConfigs[dirs] = cfg
 	}
 	var syncErr error
 	for _, cfg := range c.nginxConfigs {
 		p := provider.NewNginx(cfg.NginxConfigDir, cfg.NginxRouteDir, provider.NginxRoute{}, c.docker, cfg.NginxService, c.project)
+		if cfg.Provider == config.ProviderAngie {
+			p = provider.NewAngieRoutes(cfg.AngieConfigDir, cfg.AngieRouteDir, provider.NginxRoute{}, c.docker, cfg.AngieService, c.project)
+		}
 		opCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		var releases []func()
 		err := p.RemoveStaleConfigs(opCtx, active, func(service string) bool {

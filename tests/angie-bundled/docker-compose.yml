@@ -1,0 +1,28 @@
+services:
+  docker-release:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: docker-release
+    build:
+      dockerfile: dockerfiles/angie.Dockerfile
+    image: docker-release-angie:local
+    ports: !override
+      - "8090:80"
+
+  linear_app:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: linear_app
+
+  canary_app:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: canary_app
+
+  blue_green_app:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: blue_green_app
+
+volumes:
+  docker-release-state:

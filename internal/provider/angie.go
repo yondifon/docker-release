@@ -27,6 +27,12 @@ func NewAngie(configDir string, dockerClient *docker.Client, serviceName, projec
 	}
 }
 
+func NewAngieRoutes(configDir, routeDir string, route NginxRoute, dockerClient *docker.Client, serviceName, project string) *NginxProvider {
+	p := NewNginx(configDir, routeDir, route, dockerClient, serviceName, project)
+	p.proxyName = "angie"
+	return p
+}
+
 // GenerateConfig creates an Angie upstream configuration file
 func (p *AngieProvider) GenerateConfig(ctx context.Context, state *UpstreamState) error {
 	if err := state.Validate(); err != nil {
@@ -110,6 +116,9 @@ func renderAngieUpstream(state *UpstreamState) string {
 		}
 
 		fmt.Fprintf(&b, ";\n")
+	}
+	if len(state.Servers) == 0 {
+		fmt.Fprintf(&b, "    server 127.0.0.1:1 down;\n")
 	}
 
 	if state.Keepalive > 0 {

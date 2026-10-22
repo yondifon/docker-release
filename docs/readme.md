@@ -19,9 +19,10 @@ It never touches traffic directly. Your proxy — nginx-proxy, Nginx, Caddy, Tra
 | Image | Use |
 |---|---|
 | `malico/docker-release` | controller-only sidecar; bring your own proxy service |
-| `malico/docker-release-nginx` | bundled Nginx + controller; [setup](providers/nginx.md#bundled-image) |
+| `malico/docker-release-nginx` | Nginx + controller; [bundled setup](bundled-images.md) |
+| `malico/docker-release-angie` | Angie + controller; [bundled setup](bundled-images.md) |
 
-Both images support the same `docker release` commands.
+All images support the same `docker release` commands.
 
 ## Deploy Strategies
 
@@ -95,7 +96,7 @@ release.affinity: cookie  # sticky sessions (Angie, Caddy, HAProxy, Traefik only
 | `release.affinity` | `ip` | Session affinity: `ip`, `cookie`, or empty |
 | `release.upstream` | service name | Override the upstream name used in proxy config |
 
-`DR_DEFAULT_PROVIDER` sets the provider default. The bundled Nginx image sets it to `nginx`; add `release.nginx.host` or `release.nginx.path` to expose a managed service.
+`DR_DEFAULT_PROVIDER` sets the provider default. Bundles set it to their proxy; add `release.host` or `release.path` to route requests to an app. See [Bundled proxy images](bundled-images.md) for the shared labels, defaults, TLS, and environment variables. Existing `release.nginx.*` routing labels remain aliases.
 
 ### Strategy Labels
 
@@ -127,12 +128,6 @@ release.affinity: cookie  # sticky sessions (Angie, Caddy, HAProxy, Traefik only
 | `release.haproxy.config_dir` | `/shared/haproxy-config` | Shared volume path for HAProxy backend files |
 | `release.traefik.config_dir` | `/shared/traefik-config` | Shared volume path for Traefik dynamic config files |
 | `release.nginx_proxy.config_dir` | `/shared/nginx-tmpl` | Shared volume path for the nginx-proxy template |
-
-### Bundled Nginx Env
-
-| Env var | Default | Description |
-|---|---|---|
-| `DR_NGINX_SKIP_CONFIG` | off | Use a fully mounted `/etc/nginx/nginx.conf` instead of generated config |
 
 ## Health Checks
 

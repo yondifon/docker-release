@@ -1,0 +1,111 @@
+# Bundled proxy images
+
+Run a proxy and docker-release in one Compose service. Add routing labels to your apps; you do not need a proxy config file or a shared config volume.
+
+## Choose an image
+
+| Proxy | Image |
+|---|---|
+| Nginx | `malico/docker-release-nginx:<version>` |
+| Angie | `malico/docker-release-angie:<version>` |
+
+Use a release version in production. `latest` follows the newest release. Images support `linux/amd64` and `linux/arm64`.
+
+Caddy, HAProxy, and Traefik bundles will use the same setup and image naming, but are not available yet.
+
+## Add the service
+
+Copy this service and volume into your Compose file. Add the two labels to an app that has a Docker health check:
+
+```yaml
+services:
+  docker-release:
+    image: malico/docker-release-angie:latest
+    ports:
+      - "80:80"
+    stop_grace_period: 90s
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - docker-release-state:/var/lib/docker-release
+
+  app:
+    image: your-registry/app:latest
+    labels:
+      release.enable: "true"
+      release.host: app.example.com
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  docker-release-state:
+```
+
+Run `docker compose up -d`. Point the hostname at your server. Requests go to your app's lowest exposed port, or port 80 if none is exposed. Expose only its HTTP port. The bundle and apps must share a Docker network. Do not publish app ports just for routing.
+
+The Docker socket lets docker-release manage containers and grants control of the Docker host. Use bundles only with trusted services. The state volume keeps rollback history when you recreate the bundle. Generated proxy files stay inside the bundle and are recreated from app labels.
+
+No environment variables, `release.provider` label, proxy service name, or health check override is needed. The image supplies its own health check. It becomes healthy when routing is ready and the proxy accepts HTTP requests.
+
+For later releases, install the [host command](../README.md#install-cli), then run `docker release app`. Keep a health check that proves each app can serve requests.
+
+## Routing labels
+
+| Label | Default | What you get |
+|---|---|---|
+| `release.enable` | off | Set `"true"` to manage this app |
+| `release.host` | empty | A route for this hostname; comma-separated names are also accepted |
+| `release.path` | `/` with a host; no route without a host | Route requests under this path; the prefix is removed before forwarding |
+| `release.tls.cert` | empty | Path to a mounted PEM certificate, including its chain |
+| `release.tls.key` | empty | Path to the matching PEM private key; set both certificate and key |
+| `release.tls.redirect` | `false` | Set `"true"` to redirect HTTP to HTTPS with status 308 |
+| `release.strategy` | `linear` | Replace containers one at a time; also accepts `blue-green` and `canary` |
+| `release.affinity` | `ip` | Keep each client on one backend; use `cookie` for Angie sticky cookies or `""` to turn this off |
+| `release.health_check_timeout` | `60s` | How long a replacement has to become healthy |
+| `release.drain_timeout` | `10s` | Time allowed for requests to finish before an old container stops |
+
+Give each app a different host. For several paths on one host, mount your own proxy config instead. Without a host, a path adds a route to the default HTTP server; `/health` is reserved. For example, `/app/orders` at path `/app/` reaches your app as `/orders`.
+
+## Add TLS
+
+Bundles do not obtain or renew certificates for you. Use your certificate tool, mount its output read-only, and publish port 443:
+
+```yaml
+services:
+  docker-release:
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./certs:/certs:ro
+
+  app:
+    labels:
+      release.tls.cert: /certs/app/fullchain.pem
+      release.tls.key: /certs/app/privkey.pem
+      release.tls.redirect: "true"
+```
+
+Add these entries to the complete setup above; keep its socket and state mounts and app labels. TLS requires `release.host`. After renewing a certificate, run `docker release app` to apply it. If TLS ends at a proxy in front of the bundle, leave these labels unset and use HTTP between the proxies.
+
+## Environment variables
+
+| Variable | Default | When to set it |
+|---|---|---|
+| `DR_PROXY_SKIP_CONFIG` | `false` | Use a full proxy config you mount yourself; see the provider page for its path |
+| `DR_DEFAULT_PROVIDER` | The image's proxy | Only when deliberately changing the provider default; an explicit `release.provider` wins |
+| `DR_BUNDLED_PROXY` | The image's proxy | Set by the image; leave it unchanged |
+
+Keep the default project detection. A bundle manages the apps in its own Compose project; all-project mode is not supported for bundled routing.
+
+## Switch bundles
+
+Change only the image from `malico/docker-release-nginx:<version>` to `malico/docker-release-angie:<version>` and recreate that service. Keep the ports, mounts, health checks, and shared labels. Recreating the proxy interrupts traffic; use app releases, not bundle replacement, for zero-downtime app updates.
+
+If apps explicitly set `release.provider: nginx`, remove that label or change it to `angie`. Custom proxy config and provider-specific features are not portable; check the [Nginx](providers/nginx.md) or [Angie](providers/angie.md) page before switching.
+
+Existing Nginx labels remain aliases: `release.nginx.host`, `release.nginx.path`, and `release.nginx.ssl.cert`, `.key`, and `.redirect`. The shared label wins when both names are set. These aliases also work in the Angie bundle.
+
+`DR_NGINX_SKIP_CONFIG` remains an alias for `DR_PROXY_SKIP_CONFIG` in the Nginx bundle. `DR_PROXY_SKIP_CONFIG` wins when both variables are set. Existing Nginx mounts and config paths still work.

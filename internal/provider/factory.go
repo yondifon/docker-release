@@ -31,16 +31,20 @@ func NewFactory(dockerClient *docker.Client, project string) *Factory {
 // failures are returned as errors (not silently degraded to no-op) so a
 // misconfigured template fails the deployment loudly.
 func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
+	route := NginxRoute{
+		Host:        cfg.RouteHost,
+		Path:        cfg.RoutePath,
+		SSLCert:     cfg.TLSCert,
+		SSLKey:      cfg.TLSKey,
+		SSLRedirect: cfg.TLSRedirect,
+	}
 	switch cfg.Provider {
 	case config.ProviderNginx:
-		return NewNginx(cfg.NginxConfigDir, cfg.NginxRouteDir, NginxRoute{
-			Host:        cfg.NginxHost,
-			Path:        cfg.NginxPath,
-			SSLCert:     cfg.NginxSSLCert,
-			SSLKey:      cfg.NginxSSLKey,
-			SSLRedirect: cfg.NginxSSLRedirect,
-		}, f.docker, cfg.NginxService, f.project), nil
+		return NewNginx(cfg.NginxConfigDir, cfg.NginxRouteDir, route, f.docker, cfg.NginxService, f.project), nil
 	case config.ProviderAngie:
+		if cfg.AngieRouteDir != "" {
+			return NewAngieRoutes(cfg.AngieConfigDir, cfg.AngieRouteDir, route, f.docker, cfg.AngieService, f.project), nil
+		}
 		return NewAngie(cfg.AngieConfigDir, f.docker, cfg.AngieService, f.project), nil
 	case config.ProviderTraefik:
 		return NewTraefik(cfg.TraefikConfigDir), nil

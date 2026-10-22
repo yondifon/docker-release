@@ -1,16 +1,17 @@
 VERSION ?= $(shell v=$$(git tag --points-at HEAD 2>/dev/null | head -1); echo $${v:-dev})
 IMAGE   ?= malico/docker-release
 NGINX_IMAGE ?= $(IMAGE)-nginx
+ANGIE_IMAGE ?= $(IMAGE)-angie
 
 # Bump type passed as a goal: make publish major|minor|fix
 BUMP := $(filter major minor fix,$(MAKECMDGOALS))
 
-.PHONY: dev dev-remove test build build-regular build-nginx publish tag buildx-builder \
+.PHONY: dev dev-remove test lint build build-regular build-nginx build-angie publish tag buildx-builder \
 	major minor fix print-version \
-	up-nginx up-nginx-bundled up-angie up-traefik up-nginx-proxy up-caddy up-haproxy \
-	down-nginx down-nginx-bundled down-angie down-traefik down-nginx-proxy down-caddy down-haproxy
+	up-nginx up-nginx-bundled up-angie-bundled up-angie up-traefik up-nginx-proxy up-caddy up-haproxy \
+	down-nginx down-nginx-bundled down-angie-bundled down-angie down-traefik down-nginx-proxy down-caddy down-haproxy
 
-build: build-regular build-nginx
+build: build-regular build-nginx build-angie
 
 build-regular:
 	docker build \
@@ -19,12 +20,14 @@ build-regular:
 		-t $(IMAGE):latest \
 		.
 
-build-nginx:
+build-nginx: BUNDLE_IMAGE = $(NGINX_IMAGE)
+build-angie: BUNDLE_IMAGE = $(ANGIE_IMAGE)
+build-nginx build-angie:
 	docker build \
-		-f dockerfiles/nginx.Dockerfile \
+		-f dockerfiles/$(patsubst build-%,%,$@).Dockerfile \
 		--build-arg VERSION=$(VERSION) \
-		-t $(NGINX_IMAGE):$(VERSION) \
-		-t $(NGINX_IMAGE):latest \
+		-t $(BUNDLE_IMAGE):$(VERSION) \
+		-t $(BUNDLE_IMAGE):latest \
 		.
 
 tag:
@@ -101,6 +104,16 @@ else
 		-t $(NGINX_IMAGE):latest \
 		$${major:+-t $(NGINX_IMAGE):$$major} \
 		--push \
+		. && \
+	docker buildx build \
+		--builder docker-release-builder \
+		--platform linux/amd64,linux/arm64 \
+		-f dockerfiles/angie.Dockerfile \
+		--build-arg VERSION=$(VERSION) \
+		-t $(ANGIE_IMAGE):$(VERSION) \
+		-t $(ANGIE_IMAGE):latest \
+		$${major:+-t $(ANGIE_IMAGE):$$major} \
+		--push \
 		. && $(MAKE) tag
 endif
 
@@ -121,13 +134,20 @@ dev-remove:
 
 test:
 	go test ./...
-	go test -tags bundled_nginx ./cmd/docker-release
+	go test -tags bundled_nginx ./...
+	go test -tags bundled_angie ./...
+
+lint:
+	@test -z "$$(gofmt -l $(if $(FILES),$(FILES),cmd internal packaging))"
+	go vet ./...
+	go vet -tags bundled_nginx ./...
+	go vet -tags bundled_angie ./...
 
 up-nginx:
 	docker compose -f tests/nginx/docker-compose.yml up --build
 
-up-nginx-bundled:
-	docker compose -f tests/nginx-bundled/docker-compose.yml up --build
+up-nginx-bundled up-angie-bundled:
+	docker compose -f tests/$(patsubst up-%,%,$@)/docker-compose.yml up --build
 
 up-angie:
 	docker compose -f tests/angie/docker-compose.yml up --build
@@ -147,8 +167,8 @@ up-haproxy:
 down-nginx:
 	docker compose -f tests/nginx/docker-compose.yml down -v
 
-down-nginx-bundled:
-	docker compose -f tests/nginx-bundled/docker-compose.yml down -v
+down-nginx-bundled down-angie-bundled:
+	docker compose -f tests/$(patsubst down-%,%,$@)/docker-compose.yml down -v
 
 down-angie:
 	docker compose -f tests/angie/docker-compose.yml down -v
