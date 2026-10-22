@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 var (
@@ -16,15 +17,52 @@ var (
 // RecordFile notes that path was successfully written by a provider.
 // Best-effort: errors are silently ignored so providers never fail because of this.
 func RecordFile(path string) {
+	updateManifest(path, true)
+}
+
+func ForgetFile(path string) {
+	updateManifest(path, false)
+}
+
+func updateManifest(path string, present bool) {
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
 		return
 	}
-	f, err := os.OpenFile(manifestPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(manifestPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintln(f, path)
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil && !os.IsNotExist(err) {
+		return
+	}
+	files := make(map[string]bool)
+	for _, name := range strings.Split(string(data), "\n") {
+		if name != "" && name != path {
+			files[name] = true
+		}
+	}
+	if present {
+		files[path] = true
+	}
+	var b strings.Builder
+	for name := range files {
+		fmt.Fprintln(&b, name)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(manifestPath), ".files-*")
+	if err != nil {
+		return
+	}
+	defer os.Remove(tmp.Name())
+	_, writeErr := tmp.WriteString(b.String())
+	if err := errors.Join(writeErr, tmp.Close()); err != nil {
+		return
+	}
+	_ = os.Rename(tmp.Name(), manifestPath)
 }
 
 func MarkReady() error {
@@ -51,7 +89,7 @@ func IsReady() bool {
 	}
 
 	data, err := os.ReadFile(manifestPath)
-	if errors.Is(err, os.ErrNotExist) || len(strings.TrimSpace(string(data))) == 0 {
+	if errors.Is(err, os.ErrNotExist) {
 		return true
 	}
 	if err != nil {

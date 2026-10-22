@@ -35,9 +35,11 @@ type Controller struct {
 	stateBaseDir  string
 	stateManagers map[string]*state.Manager
 
-	mu          sync.Mutex
-	deployments map[string]activeDeployment
-	wg          sync.WaitGroup
+	mu           sync.Mutex
+	deployments  map[string]activeDeployment
+	wg           sync.WaitGroup
+	configMu     sync.Mutex
+	nginxConfigs map[nginxConfigDirs]*config.ServiceConfig
 }
 
 // New creates a Controller. stateManager is the per-project state manager; in
@@ -83,6 +85,11 @@ func (c *Controller) managerFor(project string) *state.Manager {
 }
 
 func (c *Controller) Watch(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() {
+		cancel()
+		c.wg.Wait()
+	}()
 	health.ClearReady()
 
 	if err := c.docker.Ping(ctx); err != nil {
@@ -90,11 +97,6 @@ func (c *Controller) Watch(ctx context.Context) error {
 	}
 
 	slog.Info("connected to docker", "component", "controller")
-
-	// Block shutdown until in-flight deployments (and their abort-rollbacks,
-	// which run on a detached context) finish, so the process doesn't exit
-	// mid-rollout. All deploy goroutines are tracked on c.wg.
-	defer c.wg.Wait()
 
 	services, err := c.discoverServices(ctx)
 	if err != nil {
@@ -110,11 +112,14 @@ func (c *Controller) Watch(ctx context.Context) error {
 	commandTicker := time.NewTicker(time.Second)
 	defer commandTicker.Stop()
 
-	c.generateInitialConfigs(ctx, services)
-	c.recoverInterruptedDeployments(ctx)
+	bootstrapCtx := provider.WithNginxBootstrap(ctx)
+	if err := c.generateInitialConfigs(bootstrapCtx, services); err != nil {
+		return fmt.Errorf("generating initial configs: %w", err)
+	}
+	c.recoverInterruptedDeployments(bootstrapCtx)
 
 	if err := health.MarkReady(); err != nil {
-		slog.Warn("could not write ready sentinel", "component", "controller", "err", err)
+		return fmt.Errorf("writing ready sentinel: %w", err)
 	}
 
 	c.processReleaseCommands(ctx)
