@@ -122,7 +122,7 @@ func (c *Controller) cleanStaleConfigs(ctx context.Context, activeConfigs map[st
 		if active[cd] == nil {
 			active[cd] = make(map[string]bool)
 		}
-		active[cd][name] = true
+		active[cd][filepath.Base(name)] = true
 	}
 
 	for cd, services := range active {
