@@ -6,13 +6,13 @@ import ssl
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("proxy", choices=["nginx", "angie"])
+    parser.add_argument("proxy", choices=["nginx", "angie", "caddy"])
     parser.add_argument("--tls-port", type=int)
     parser.add_argument("--ca")
     args = parser.parse_args()
     if args.tls_port and not args.ca:
         parser.error("--tls-port needs --ca with the test certificate")
-    port = 8089 if args.proxy == "nginx" else 8090
+    port = {"nginx": 8089, "angie": 8090, "caddy": 8091}[args.proxy]
     results = {}
     for host, path in [("linear", "linear"), ("canary", "canary"), ("bluegreen", "bluegreen")]:
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
