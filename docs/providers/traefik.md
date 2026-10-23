@@ -2,7 +2,45 @@
 
 Use this when your app runs behind Traefik.
 
-`docker-release` writes dynamic YAML files to a shared volume. Traefik watches that directory and reloads automatically. Your router labels stay on the app service — `docker-release` only manages the file-provider service that holds the live backend list.
+Choose the bundle for one service with routing labels, or keep Traefik separate and manage your own routers.
+
+## Bundled image
+
+Use `malico/docker-release-traefik:<version>` with the [shared bundle setup](../bundled-images.md). Keep the same app labels, ports, and state mount as the other four bundles. You do not need `release.provider`, a Traefik config file, a separate proxy service, or a shared config volume.
+
+The bundle routes `release.host`, strips `release.path`, and supports the shared certificate, key, and HTTP 308 redirect labels. Traefik does not obtain or renew certificates in this setup. Mount certificates read-only and publish port 443 to add HTTPS.
+
+App releases keep existing client connections open. Old containers stay available until Traefik has applied the new routes and backend list. Keep `release.drain_timeout` long enough for your app's requests to finish. A rejected config leaves the previous routing files in place and fails the deployment; check the logs, labels, and mounted certificates before trying again.
+
+Routing comes only from the shared `release.*` labels. Do not enable Traefik's Docker routing provider or add `traefik.*` routing labels to bundled apps.
+
+### Custom config
+
+Set `DR_PROXY_SKIP_CONFIG=true` and mount a full static config read-only at `/etc/traefik/traefik.yml`. Keep these settings from [the default config](../../packaging/traefik/traefik.yml):
+
+- HTTP entry point `web` on port 80 and HTTPS entry point `websecure` on port 443.
+- File provider watching `/shared/traefik-config`; keep this directory writable.
+- API on `127.0.0.1:8080`, with `api.insecure: true` and the dashboard off.
+- `ping.manualRouting: true` and `/shared/traefik-config/health.yml` for HTTP 200 at `/health`.
+- Bounded request and shutdown timeouts.
+
+Keep the API bound to loopback; do not publish its port or route `api@internal` publicly. Port `127.0.0.1:8082` is also reserved inside the bundle. Names starting with `dr-` in the file provider are reserved for generated routes, services, and middleware. Custom static config does not turn off the shared routing labels.
+
+### Check locally
+
+```sh
+docker compose -f tests/traefik-bundled/docker-compose.yml up --build -d --wait
+python3 tests/bundled/check-routing.py traefik
+python3 tests/bundled/check-reload.py traefik
+python3 tests/bundled/check-shutdown.py traefik
+docker compose -f tests/traefik-bundled/docker-compose.yml down -v
+```
+
+The checks cover app bodies, stripped paths, unknown routes, all three release strategies, and shutdown with an incomplete request. See [bundle checks](../../tests/bundled/README.md) for local TLS and image cleanup.
+
+## Separate Traefik service
+
+`docker-release` writes dynamic YAML files to a shared volume. Traefik watches that directory and reloads automatically. Your router labels stay on the app service; `docker-release` only manages the file-provider service holding the live backend list. This setup does not confirm that Traefik has applied a file change before a release continues; use the bundle when you need that guarantee.
 
 ## What Gets Written
 
@@ -70,7 +108,7 @@ volumes:
   traefik-config:
 ```
 
-## Required Labels
+## Required labels for a separate proxy
 
 ```yaml
 release.enable: "true"
@@ -153,7 +191,7 @@ release.bg.green_weight: 50
 
 ## Notes
 
-- `release.affinity: ip` uses Traefik HRW (highest random weight) routing.
+- `release.affinity: ip` uses sticky cookies for unweighted services and HRW (highest random weight) for weighted groups.
 - `release.affinity: cookie` uses a generated cookie name like `_srr_a172cedcae`.
 
 ## Common Problems
