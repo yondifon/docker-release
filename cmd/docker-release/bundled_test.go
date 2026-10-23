@@ -1,4 +1,4 @@
-//go:build bundled_nginx || bundled_angie || bundled_caddy
+//go:build bundled_nginx || bundled_angie || bundled_caddy || bundled_haproxy
 
 package main
 
@@ -22,13 +22,16 @@ func TestBundledProcess(t *testing.T) {
 		os.Exit(7)
 	}
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGQUIT, syscall.SIGTERM)
+	signal.Notify(sig, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGUSR1)
 	if err := os.WriteFile(filepath.Join(dir, "listening"), nil, 0o600); err != nil {
 		os.Exit(2)
 	}
 	want := syscall.SIGQUIT
 	if os.Getenv("DR_TEST_CADDY") == "1" {
 		want = syscall.SIGTERM
+	}
+	if os.Getenv("DR_TEST_HAPROXY") == "1" {
+		want = syscall.SIGUSR1
 	}
 	if <-sig != want {
 		os.Exit(3)
@@ -43,7 +46,7 @@ func TestBundledProcess(t *testing.T) {
 }
 
 func TestBundledShutdownWaitsForControllerBeforeGracefulProxyStop(t *testing.T) {
-	for _, name := range []string{"nginx", "angie", "caddy"} {
+	for _, name := range []string{"nginx", "angie", "caddy", "haproxy"} {
 		t.Run(name, func(t *testing.T) { testBundledShutdown(t, name) })
 	}
 }
@@ -54,6 +57,9 @@ func testBundledShutdown(t *testing.T, name string) {
 	t.Setenv("DR_TEST_PROXY_DIR", dir)
 	if name == "caddy" {
 		t.Setenv("DR_TEST_CADDY", "1")
+	}
+	if name == "haproxy" {
+		t.Setenv("DR_TEST_HAPROXY", "1")
 	}
 	executable, err := os.Executable()
 	if err != nil {
