@@ -52,6 +52,8 @@ No environment variables, `release.provider` label, proxy service name, or healt
 
 For later releases, install the [host command](../README.md#install-cli), then run `docker release app`. Keep a health check that proves each app can serve requests.
 
+Caddy app releases keep existing client connections open. Changes to hostnames, routes, or TLS settings can close idle connections; apply those changes during a maintenance window.
+
 ## Routing labels
 
 | Label | Default | What you get |

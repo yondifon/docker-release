@@ -27,11 +27,13 @@ docker compose -f tests/caddy-bundled/docker-compose.yml down -v
 rm .oga_tmp/caddy-root.crt
 ```
 
-For a custom Caddyfile, set `DR_PROXY_SKIP_CONFIG=true` and mount it at `/etc/caddy/Caddyfile:ro`. Keep the admin API enabled on loopback and serve HTTP 200 at `http://127.0.0.1/health`.
+For a custom Caddyfile, set `DR_PROXY_SKIP_CONFIG=true` and mount it at `/etc/caddy/Caddyfile:ro`. Keep the admin API at `127.0.0.1:2019` and serve HTTP 200 at `http://127.0.0.1/health`.
 
 Import `/shared/caddy-config/*.caddy` globally. To keep hostless path labels working, import `/shared/caddy-config/*.location` inside your default HTTP site.
 
 To write an app's routes yourself, omit its `release.host` and `release.path` labels. Import its `<service>_upstream` snippet where needed.
+
+The bundle uses Caddy's default backend connection pool size. Set `release.caddy.keepalive` to override it, or `0` to turn backend keep-alive off.
 
 ## Separate Caddy service
 
