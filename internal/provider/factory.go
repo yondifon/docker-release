@@ -60,6 +60,8 @@ func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 				TLSCert:     cfg.TLSCert,
 				TLSKey:      cfg.TLSKey,
 				TLSRedirect: cfg.TLSRedirect,
+				Keepalive:   cfg.CaddyKeepalive,
+				Affinity:    cfg.Affinity,
 			}, f.docker, cfg.CaddyService, f.project), nil
 		}
 		return NewCaddy(cfg.CaddyConfigDir, f.docker, cfg.CaddyService, f.project), nil
