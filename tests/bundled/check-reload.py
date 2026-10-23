@@ -8,7 +8,7 @@ from bundle_checks import Bundle, check_releases, check_routing
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("proxy", choices=["nginx", "angie"], nargs="?", default="nginx")
+    parser.add_argument("proxy", choices=["nginx", "angie", "haproxy"], nargs="?", default="nginx")
     bundle = Bundle(parser.parse_args().proxy)
     check_routing(bundle)
     check_releases(bundle)
