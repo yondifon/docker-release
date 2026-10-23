@@ -1,4 +1,4 @@
-//go:build bundled_nginx || bundled_angie || bundled_caddy
+//go:build bundled_nginx || bundled_angie || bundled_caddy || bundled_haproxy
 
 package main
 
@@ -40,6 +40,15 @@ func bundledProxyFromEnv() (*bundledProxy, error) {
 		}
 		if v == "caddy" {
 			proxy.args = []string{"caddy", "run", "--config", proxy.configPath}
+		}
+		if v == "haproxy" {
+			proxy.args = []string{
+				"haproxy", "-W", "-db", "-S", "/run/haproxy/master.sock,mode,600",
+				"-f", proxy.configPath, "-f", "/shared/haproxy-config",
+			}
+			if !truthy(os.Getenv("DR_PROXY_SKIP_CONFIG")) {
+				proxy.args = append(proxy.args, "-f", "/shared/haproxy-config/routes")
+			}
 		}
 		return proxy, nil
 	default:
@@ -204,6 +213,9 @@ func stopBundledProxy(cmd *exec.Cmd, done <-chan struct{}, name string) {
 	sig := syscall.SIGQUIT
 	if name == "caddy" {
 		sig = syscall.SIGTERM
+	}
+	if name == "haproxy" {
+		sig = syscall.SIGUSR1
 	}
 	_ = cmd.Process.Signal(sig)
 	select {

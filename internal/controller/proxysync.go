@@ -34,7 +34,7 @@ func (c *Controller) cleanStaleProxyConfigs(ctx context.Context, configs map[str
 		}
 	}
 	name := strings.ToLower(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")))
-	if name == "nginx" || name == "angie" || name == "caddy" {
+	if name == "nginx" || name == "angie" || name == "caddy" || name == "haproxy" {
 		cfg, err := config.ParseLabels(map[string]string{"release.enable": "true", "release.provider": name})
 		if err != nil {
 			return err
@@ -52,6 +52,8 @@ func (c *Controller) cleanStaleProxyConfigs(ctx context.Context, configs map[str
 			p = provider.NewAngieRoutes(cfg.AngieConfigDir, cfg.AngieRouteDir, provider.NginxRoute{}, c.docker, cfg.AngieService, c.project)
 		} else if cfg.Provider == config.ProviderCaddy {
 			p = provider.NewCaddyRoutes(cfg.CaddyConfigDir, provider.CaddyRoute{}, c.docker, cfg.CaddyService, c.project)
+		} else if cfg.Provider == config.ProviderHAProxy {
+			p = provider.NewHAProxyRoutes(cfg.HAProxyConfigDir, provider.HAProxyRoute{}, c.docker, cfg.HAProxyService, c.project)
 		}
 		opCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		var releases []func()
@@ -98,6 +100,9 @@ func transactionalProxyDirs(cfg *config.ServiceConfig) (proxyConfigDirs, bool) {
 	case config.ProviderCaddy:
 		bundled := strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "caddy")
 		return proxyConfigDirs{cfg.CaddyConfigDir, ""}, bundled
+	case config.ProviderHAProxy:
+		bundled := strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "haproxy")
+		return proxyConfigDirs{cfg.HAProxyConfigDir, ""}, bundled
 	default:
 		return proxyConfigDirs{}, false
 	}
