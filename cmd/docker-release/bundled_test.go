@@ -1,4 +1,4 @@
-//go:build bundled_nginx || bundled_angie
+//go:build bundled_nginx || bundled_angie || bundled_caddy
 
 package main
 
@@ -26,7 +26,11 @@ func TestBundledProcess(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "listening"), nil, 0o600); err != nil {
 		os.Exit(2)
 	}
-	if <-sig != syscall.SIGQUIT {
+	want := syscall.SIGQUIT
+	if os.Getenv("DR_TEST_CADDY") == "1" {
+		want = syscall.SIGTERM
+	}
+	if <-sig != want {
 		os.Exit(3)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "controller-stopped")); err != nil {
@@ -39,15 +43,25 @@ func TestBundledProcess(t *testing.T) {
 }
 
 func TestBundledShutdownWaitsForControllerBeforeGracefulProxyStop(t *testing.T) {
+	for _, name := range []string{"nginx", "angie", "caddy"} {
+		t.Run(name, func(t *testing.T) { testBundledShutdown(t, name) })
+	}
+}
+
+func testBundledShutdown(t *testing.T, name string) {
+	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("DR_TEST_PROXY_DIR", dir)
+	if name == "caddy" {
+		t.Setenv("DR_TEST_CADDY", "1")
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	proxy := &bundledProxy{name: "test", args: []string{executable, "-test.run=^TestBundledProcess$"}}
+	proxy := &bundledProxy{name: name, args: []string{executable, "-test.run=^TestBundledProcess$"}}
 	err = superviseBundledProxy(ctx, proxy, func(ctx context.Context) error {
 		<-ctx.Done()
 		return os.WriteFile(filepath.Join(dir, "controller-stopped"), nil, 0o600)

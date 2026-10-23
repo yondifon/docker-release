@@ -2,6 +2,8 @@ package provider
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/malico/docker-release/internal/config"
@@ -51,6 +53,17 @@ func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 	case config.ProviderNginxProxy:
 		return f.nginxProxyProvider(cfg)
 	case config.ProviderCaddy:
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "caddy") {
+			return NewCaddyRoutes(cfg.CaddyConfigDir, CaddyRoute{
+				Host:        cfg.RouteHost,
+				Path:        cfg.RoutePath,
+				TLSCert:     cfg.TLSCert,
+				TLSKey:      cfg.TLSKey,
+				TLSRedirect: cfg.TLSRedirect,
+				Keepalive:   cfg.CaddyKeepalive,
+				Affinity:    cfg.Affinity,
+			}, f.docker, cfg.CaddyService, f.project), nil
+		}
 		return NewCaddy(cfg.CaddyConfigDir, f.docker, cfg.CaddyService, f.project), nil
 	case config.ProviderHAProxy:
 		return NewHAProxy(cfg.HAProxyConfigDir, f.docker, cfg.HAProxyService, f.project), nil

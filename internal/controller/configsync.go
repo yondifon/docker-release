@@ -92,7 +92,7 @@ func (c *Controller) syncServiceConfig(ctx context.Context, key serviceKey, cfg 
 }
 
 func (c *Controller) cleanStaleConfigs(ctx context.Context, activeConfigs map[string]*config.ServiceConfig) error {
-	if err := c.cleanStaleNginxConfigs(ctx, activeConfigs); err != nil {
+	if err := c.cleanStaleProxyConfigs(ctx, activeConfigs); err != nil {
 		return err
 	}
 	type configDir struct {
@@ -102,7 +102,7 @@ func (c *Controller) cleanStaleConfigs(ctx context.Context, activeConfigs map[st
 	active := make(map[configDir]map[string]bool)
 
 	for name, cfg := range activeConfigs {
-		if cfg.Provider == config.ProviderNginx || (cfg.Provider == config.ProviderAngie && cfg.AngieRouteDir != "") {
+		if _, transactional := transactionalProxyDirs(cfg); transactional {
 			continue
 		}
 		ext, perService := provider.ConfigExt(cfg.Provider)
