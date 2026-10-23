@@ -10,7 +10,7 @@ python3 tests/bundled/check-shutdown.py angie
 docker compose -f tests/angie-bundled/docker-compose.yml down -v
 ```
 
-For Nginx, replace `angie` with `nginx` in each command. The reload check pauses the proxy master for 12 seconds while workers keep serving requests, releases `linear_app`, and checks that its old container survives until the reload is accepted. The shutdown check stops the controller with an incomplete HTTP request open and requires exit 0 within 15 seconds.
+For Nginx, replace `angie` with `nginx` in each command. The reload check pauses the proxy master for 12 seconds while workers keep serving requests and checks that the old `linear_app` container survives until the reload is accepted. It then checks canary and blue/green releases too. The shutdown check stops the controller with an incomplete HTTP request open and requires exit 0 within 15 seconds.
 
 For Caddy, run its checks instead of the paused-master check. Caddy serves requests and applies config in one process:
 
@@ -22,6 +22,10 @@ docker compose -f tests/caddy-bundled/docker-compose.yml down -v
 ```
 
 The Caddy check covers stripped paths, HTTP and trusted HTTPS requests during all three release strategies, and certificate storage across bundle recreation. It writes the test CA to `.oga_tmp/caddy-root.crt`; remove that file after checking.
+
+All traffic checks use both new and kept-alive connections. Every successful response must contain the requested app's exact name and the stripped request path, including its query string. Wrong-app bodies count as failures and are also counted separately. Unknown hosts and paths must return 404 without an app body. The JSON result reports requests, failures, and wrong-backend counts per proxy and per traffic stream.
+
+Failed requests are not retried. The Caddy check also checks that pending and idle connections survive an upstream update, and that app releases keep the same HTTP and HTTPS listening sockets.
 
 ## TLS
 

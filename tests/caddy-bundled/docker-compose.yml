@@ -29,6 +29,8 @@ services:
     extends:
       file: ../bundled/docker-compose.yml
       service: linear_app
+    environment:
+      WHOAMI_NAME: path
     labels:
       release.host: ""
       release.path: /path/
