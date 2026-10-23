@@ -25,6 +25,10 @@ func caddyReloadFixture(t *testing.T) (*CaddyProvider, *atomic.Bool) {
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
 				"Id": "0123456789abcdef", "Image": "caddy:alpine", "State": "running",
 			}})
+		case path == "/docker_release/upstreams":
+			if reject.Load() {
+				http.Error(w, "bad upstreams", http.StatusBadRequest)
+			}
 		case strings.HasSuffix(path, "/exec"):
 			_, _ = w.Write([]byte(`{"Id":"reload"}`))
 		case strings.HasSuffix(path, "/start"):
@@ -48,7 +52,9 @@ func caddyReloadFixture(t *testing.T) (*CaddyProvider, *atomic.Bool) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	return NewCaddyRoutes(t.TempDir(), CaddyRoute{Host: "app.localhost"}, client, "", "test"), &reject
+	p := NewCaddyRoutes(t.TempDir(), CaddyRoute{Host: "app.localhost"}, client, "", "test")
+	p.adminURL = api.URL
+	return p, &reject
 }
 
 func TestCaddyRejectedConfigDoesNotPoisonLaterReleases(t *testing.T) {
@@ -84,6 +90,7 @@ func TestCaddyRejectedConfigDoesNotPoisonLaterReleases(t *testing.T) {
 	}
 	reject.Store(false)
 	other := NewCaddyRoutes(p.configDir, CaddyRoute{Host: "api.localhost"}, p.docker, "", "test")
+	other.adminURL = p.adminURL
 	state.Service = "api"
 	if err := other.GenerateConfig(ctx, state); err != nil {
 		t.Fatal(err)

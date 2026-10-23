@@ -21,5 +21,12 @@ import /shared/caddy-config/*.caddy
         respond "ok" 200
     }
     import /shared/caddy-config/*.location
+    handle {
+        respond 404
+    }
+}
+
+:443 {
+    respond 404
 }
 `)

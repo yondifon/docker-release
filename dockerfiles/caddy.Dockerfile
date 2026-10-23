@@ -8,12 +8,22 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags bundled_caddy -ldflags="-s -w -X main.version=${VERSION}" -o /bin/dr ./cmd/docker-release/
 
-FROM caddy:2-alpine AS runtime
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS caddy-builder
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src
+COPY packaging/caddy/runtime/go.mod packaging/caddy/runtime/go.sum ./
+RUN go mod download
+COPY packaging/caddy/runtime/ ./
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -p 2 -ldflags="-s -w" -o /bin/caddy ./cmd/caddy/
 
-RUN apk add --no-cache tini \
-  && mkdir -p /shared/caddy-config
+FROM alpine:3.23 AS runtime
+
+RUN apk add --no-cache ca-certificates tini \
+  && mkdir -p /etc/caddy /shared/caddy-config
 
 COPY --from=builder /bin/dr /usr/local/bin/dr
+COPY --from=caddy-builder /bin/caddy /usr/bin/caddy
 
 LABEL org.opencontainers.image.title="docker-release" \
   com.malico.docker-release.bundled-proxy="caddy"
