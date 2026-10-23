@@ -1,0 +1,7 @@
+http:
+  routers:
+    bundle-health:
+      entryPoints: [web]
+      rule: Host(`127.0.0.1`) && Path(`/health`)
+      priority: 2147482647
+      service: ping@internal

@@ -12,6 +12,10 @@ import (
 
 type TraefikProvider struct {
 	configDir string
+	bundled   bool
+	route     NginxRoute
+	pending   map[string][]byte
+	apiURL    string
 }
 
 func NewTraefik(configDir string) *TraefikProvider {
@@ -21,6 +25,9 @@ func NewTraefik(configDir string) *TraefikProvider {
 func (p *TraefikProvider) GenerateConfig(ctx context.Context, state *UpstreamState) error {
 	if err := state.Validate(); err != nil {
 		return err
+	}
+	if p.bundled {
+		return p.generateRoutes(state)
 	}
 
 	conf := renderTraefikYAML(state)
@@ -45,6 +52,9 @@ func (p *TraefikProvider) GenerateConfig(ctx context.Context, state *UpstreamSta
 }
 
 func (p *TraefikProvider) Reload(ctx context.Context) error {
+	if p.bundled {
+		return p.applyRoutes(ctx, p.pending)
+	}
 	return nil
 }
 
