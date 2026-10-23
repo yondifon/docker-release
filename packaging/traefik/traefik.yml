@@ -1,0 +1,29 @@
+entryPoints:
+  web:
+    address: :80
+    transport:
+      respondingTimeouts:
+        readTimeout: 10s
+        idleTimeout: 5s
+      lifeCycle:
+        graceTimeOut: 10s
+  websecure:
+    address: :443
+    transport:
+      respondingTimeouts:
+        readTimeout: 10s
+        idleTimeout: 5s
+      lifeCycle:
+        graceTimeOut: 10s
+  traefik:
+    address: 127.0.0.1:8080
+api:
+  insecure: true
+  dashboard: false
+ping:
+  manualRouting: true
+providers:
+  providersThrottleDuration: 100ms
+  file:
+    directory: /shared/traefik-config
+    watch: true

@@ -9,7 +9,7 @@ from bundle_checks import Bundle, check_routing
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("proxy", choices=["nginx", "angie", "caddy", "haproxy"])
+    parser.add_argument("proxy", choices=["nginx", "angie", "caddy", "haproxy", "traefik"])
     parser.add_argument("--tls-port", type=int)
     parser.add_argument("--ca")
     args = parser.parse_args()
