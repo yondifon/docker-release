@@ -16,6 +16,9 @@ type HAProxyProvider struct {
 	docker      *docker.Client
 	serviceName string
 	project     string
+	bundled     bool
+	route       HAProxyRoute
+	pending     map[string][]byte
 }
 
 func NewHAProxy(configDir string, dockerClient *docker.Client, serviceName, project string) *HAProxyProvider {
@@ -30,6 +33,9 @@ func NewHAProxy(configDir string, dockerClient *docker.Client, serviceName, proj
 func (p *HAProxyProvider) GenerateConfig(ctx context.Context, state *UpstreamState) error {
 	if err := state.Validate(); err != nil {
 		return err
+	}
+	if p.bundled {
+		return p.generateBundledConfig(state)
 	}
 
 	conf := renderHAProxyBackend(state)
@@ -54,6 +60,9 @@ func (p *HAProxyProvider) GenerateConfig(ctx context.Context, state *UpstreamSta
 }
 
 func (p *HAProxyProvider) Reload(ctx context.Context) error {
+	if p.bundled {
+		return p.applyBundledConfigs(ctx, p.pending)
+	}
 	ctr, running, err := resolveProxyContainer(ctx, p.docker, p.project, p.serviceName, "haproxy")
 	if err != nil {
 		return fmt.Errorf("resolving haproxy container: %w", err)

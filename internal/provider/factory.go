@@ -66,6 +66,16 @@ func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 		}
 		return NewCaddy(cfg.CaddyConfigDir, f.docker, cfg.CaddyService, f.project), nil
 	case config.ProviderHAProxy:
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "haproxy") {
+			return NewHAProxyRoutes(cfg.HAProxyConfigDir, HAProxyRoute{
+				Host:        cfg.RouteHost,
+				Path:        cfg.RoutePath,
+				TLSCert:     cfg.TLSCert,
+				TLSKey:      cfg.TLSKey,
+				TLSRedirect: cfg.TLSRedirect,
+				Affinity:    cfg.Affinity,
+			}, f.docker, cfg.HAProxyService, f.project), nil
+		}
 		return NewHAProxy(cfg.HAProxyConfigDir, f.docker, cfg.HAProxyService, f.project), nil
 	case config.ProviderNone:
 		return NewNoop(), nil

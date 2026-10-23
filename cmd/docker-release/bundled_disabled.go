@@ -1,4 +1,4 @@
-//go:build !bundled_nginx && !bundled_angie && !bundled_caddy
+//go:build !bundled_nginx && !bundled_angie && !bundled_caddy && !bundled_haproxy
 
 package main
 
