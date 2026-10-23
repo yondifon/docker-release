@@ -21,8 +21,11 @@ It never touches traffic directly. Your proxy — nginx-proxy, Nginx, Caddy, Tra
 | `malico/docker-release` | controller-only sidecar; bring your own proxy service |
 | `malico/docker-release-nginx` | Nginx + controller; [bundled setup](bundled-images.md) |
 | `malico/docker-release-angie` | Angie + controller; [bundled setup](bundled-images.md) |
+| `malico/docker-release-caddy` | Caddy + controller; [bundled setup](bundled-images.md) |
+| `malico/docker-release-haproxy` | HAProxy + controller; [bundled setup](bundled-images.md) |
+| `malico/docker-release-traefik` | Traefik + controller; [bundled setup](bundled-images.md) |
 
-All images support the same `docker release` commands.
+All images support the same `docker release` commands. All five bundles use the same [Compose setup and routing labels](bundled-images.md); no separate proxy service or shared config volume is needed.
 
 ## Deploy Strategies
 
@@ -68,7 +71,7 @@ Controls how requests are pinned to a backend while old and new containers run s
 
 | Value | Behavior |
 |---|---|
-| `ip` (default) | Routes by client IP. Supported by all providers. |
+| `ip` (default) | Routes by client IP, except Traefik uses sticky cookies for an unweighted service and HRW for weighted groups. |
 | `cookie` | Routes by sticky cookie. Not supported by Nginx or nginx-proxy — both fall back to IP hashing. Use with Angie, Caddy, HAProxy, or Traefik. |
 | `""` (empty) | No affinity. Requests are load-balanced freely. |
 
@@ -159,7 +162,7 @@ volumes:
 
 ## Global Mode
 
-Run one `docker-release` instance as shared infra for all projects on a server.
+Run one controller-only `docker-release` instance as shared infra for all projects on a server. Bundles manage only their own Compose project.
 
 → [docs/global.md](./global.md)
 

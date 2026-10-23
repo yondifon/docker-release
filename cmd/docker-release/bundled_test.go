@@ -1,4 +1,4 @@
-//go:build bundled_nginx || bundled_angie || bundled_caddy || bundled_haproxy
+//go:build bundled_nginx || bundled_angie || bundled_caddy || bundled_haproxy || bundled_traefik
 
 package main
 
@@ -46,7 +46,7 @@ func TestBundledProcess(t *testing.T) {
 }
 
 func TestBundledShutdownWaitsForControllerBeforeGracefulProxyStop(t *testing.T) {
-	for _, name := range []string{"nginx", "angie", "caddy", "haproxy"} {
+	for _, name := range []string{"nginx", "angie", "caddy", "haproxy", "traefik"} {
 		t.Run(name, func(t *testing.T) { testBundledShutdown(t, name) })
 	}
 }
@@ -55,7 +55,7 @@ func testBundledShutdown(t *testing.T, name string) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("DR_TEST_PROXY_DIR", dir)
-	if name == "caddy" {
+	if name == "caddy" || name == "traefik" {
 		t.Setenv("DR_TEST_CADDY", "1")
 	}
 	if name == "haproxy" {

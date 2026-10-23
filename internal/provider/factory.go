@@ -49,6 +49,9 @@ func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 		}
 		return NewAngie(cfg.AngieConfigDir, f.docker, cfg.AngieService, f.project), nil
 	case config.ProviderTraefik:
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "traefik") {
+			return NewTraefikRoutes(cfg.TraefikConfigDir, route), nil
+		}
 		return NewTraefik(cfg.TraefikConfigDir), nil
 	case config.ProviderNginxProxy:
 		return f.nginxProxyProvider(cfg)

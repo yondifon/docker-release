@@ -62,7 +62,7 @@ volumes:
 
 ## Bundled image
 
-Use `malico/docker-release-angie` for Angie and docker-release in one service. Follow [Bundled proxy images](../bundled-images.md) for the Compose setup, routing labels, TLS, defaults, and switching providers. The image sets `DR_DEFAULT_PROVIDER=angie`, so apps do not need `release.provider`.
+Use `malico/docker-release-angie:<version>` with the [shared bundle setup](../bundled-images.md). Keep the same app labels, ports, and state mount as the other four bundles. You do not need `release.provider`, an Angie config file, or a shared config volume.
 
 Set `release.affinity: cookie` for native sticky cookies. The default remains `ip`. You can also use `release.angie.sticky.learn.name` to route by a cookie your app sets.
 
@@ -120,7 +120,7 @@ server {
 
 Note: many Angie images use `/etc/angie/http.d` instead of `/etc/nginx/conf.d`. Check your image.
 
-## Required Labels
+## Required labels for a separate proxy
 
 ```yaml
 release.enable: "true"

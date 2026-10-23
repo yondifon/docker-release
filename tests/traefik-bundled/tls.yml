@@ -1,0 +1,18 @@
+services:
+  docker-release:
+    ports:
+      - "8446:443"
+    volumes:
+      - ${PWD}/.oga_tmp/certs:/certs/nginx:ro
+  linear_app:
+    labels:
+      release.tls.cert: /certs/nginx/cert.pem
+      release.tls.key: /certs/nginx/key.pem
+  canary_app:
+    labels:
+      release.tls.cert: /certs/nginx/cert.pem
+      release.tls.key: /certs/nginx/key.pem
+  blue_green_app:
+    labels:
+      release.tls.cert: /certs/nginx/cert.pem
+      release.tls.key: /certs/nginx/key.pem

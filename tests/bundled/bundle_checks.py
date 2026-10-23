@@ -10,7 +10,7 @@ import time
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-PORTS = {"nginx": 8089, "angie": 8090, "caddy": 8091, "haproxy": 8092}
+PORTS = {"nginx": 8089, "angie": 8090, "caddy": 8091, "haproxy": 8092, "traefik": 8093}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -42,7 +42,7 @@ class Bundle:
         self.context = context
         self.tls_port = tls_port
         self.routes = list(ROUTES)
-        if proxy in ["caddy", "haproxy"]:
+        if proxy in ["caddy", "haproxy", "traefik"]:
             self.routes.append(Route("path_app", "localhost", "/path/", "path"))
         self.compose = ["docker", "compose", "-f", f"tests/{proxy}-bundled/docker-compose.yml"]
         self.controller = f"{proxy}-bundled-docker-release-1"

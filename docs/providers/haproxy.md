@@ -6,7 +6,7 @@ Choose the bundle for one service with routing labels, or keep HAProxy separate 
 
 ## Bundled image
 
-Use `malico/docker-release-haproxy:<version>` with the [shared bundle setup](../bundled-images.md). Keep the same app labels, ports, and state mount as the Nginx, Angie, and Caddy bundles. You do not need `release.provider`, a HAProxy config file, or a shared config volume.
+Use `malico/docker-release-haproxy:<version>` with the [shared bundle setup](../bundled-images.md). Keep the same app labels, ports, and state mount as the other four bundles. You do not need `release.provider`, a HAProxy config file, or a shared config volume.
 
 The bundle routes each hostname and strips `release.path` before forwarding. Mounted certificates, separate private keys, and HTTP 308 redirects use the shared TLS labels. HAProxy does not obtain or renew certificates for you.
 
@@ -120,7 +120,7 @@ frontend http
     use_backend app_be if { path_beg /app }
 ```
 
-## Required Labels
+## Required labels for a separate proxy
 
 ```yaml
 release.enable: "true"

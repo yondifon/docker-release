@@ -17,6 +17,11 @@ Your proxy still serves all traffic. `docker-release` only manages the container
 | `malico/docker-release` | controller-only sidecar |
 | `malico/docker-release-nginx` | Nginx + controller; [bundled setup](docs/bundled-images.md) |
 | `malico/docker-release-angie` | Angie + controller; [bundled setup](docs/bundled-images.md) |
+| `malico/docker-release-caddy` | Caddy + controller; [bundled setup](docs/bundled-images.md) |
+| `malico/docker-release-haproxy` | HAProxy + controller; [bundled setup](docs/bundled-images.md) |
+| `malico/docker-release-traefik` | Traefik + controller; [bundled setup](docs/bundled-images.md) |
+
+For one service with routing labels, use the [shared bundle setup](docs/bundled-images.md). The quick start below uses a separate proxy service.
 
 ## Pick Your Proxy
 
@@ -98,7 +103,7 @@ docker release status app              # show one service
 
 ## Global Mode
 
-Run one `docker-release` instance as shared infra across all projects on a server — no need to add it to every app stack.
+Run one controller-only `docker-release` instance as shared infra across all projects on a server. Bundles manage only their own Compose project.
 
 → [docs/global.md](docs/global.md)
 
