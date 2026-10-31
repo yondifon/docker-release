@@ -76,7 +76,7 @@ services:
     image: traefik:v3
     ports:
       - "80:80"
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik-config:/etc/traefik/dynamic:ro
