@@ -11,6 +11,7 @@ import (
 )
 
 type NginxProvider struct {
+	proxyName string
 	configDir string
 	routeDir  string
 	route     NginxRoute
@@ -37,6 +38,7 @@ func WithNginxBootstrap(ctx context.Context) context.Context {
 
 func NewNginx(configDir, routeDir string, route NginxRoute, dockerClient *docker.Client, serviceName, project string) *NginxProvider {
 	return &NginxProvider{
+		proxyName:   "nginx",
 		configDir:   configDir,
 		routeDir:    routeDir,
 		route:       route,
@@ -52,8 +54,12 @@ func (p *NginxProvider) GenerateConfig(ctx context.Context, state *UpstreamState
 	}
 
 	// Keep candidates off disk until the lock covers validation and reload.
+	upstream := renderUpstream(state)
+	if p.proxyName == "angie" {
+		upstream = renderAngieUpstream(state)
+	}
 	p.pending = map[string][]byte{
-		filepath.Join(p.configDir, state.Service+".conf"): []byte(renderUpstream(state)),
+		filepath.Join(p.configDir, state.Service+".conf"): []byte(upstream),
 	}
 	if p.routeDir == "" {
 		return nil
@@ -63,7 +69,7 @@ func (p *NginxProvider) GenerateConfig(ctx context.Context, state *UpstreamState
 	p.pending[serverPath] = nil
 	p.pending[locationPath] = nil
 	if p.route.Host != "" {
-		p.pending[serverPath] = []byte(renderNginxServer(state, p.route))
+		p.pending[serverPath] = []byte(renderNginxServer(state, p.route, p.proxyName))
 	} else if p.route.Path != "" {
 		p.pending[locationPath] = []byte(renderNginxLocation(state, p.route))
 	}
@@ -75,38 +81,39 @@ func (p *NginxProvider) Reload(ctx context.Context) error {
 }
 
 func (p *NginxProvider) reload(ctx context.Context) error {
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "nginx") {
-		if _, err := os.Stat("/run/docker-release/nginx.started"); os.IsNotExist(err) {
+	name := p.proxyName
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), name) {
+		if _, err := os.Stat("/run/docker-release/" + name + ".started"); os.IsNotExist(err) {
 			if bootstrap, _ := ctx.Value(nginxBootstrapKey{}).(bool); bootstrap {
 				return nil
 			}
-			return fmt.Errorf("bundled nginx is not ready; wait until the container is healthy before deploying")
+			return fmt.Errorf("bundled %s is not ready; wait until the container is healthy before deploying", name)
 		} else if err != nil {
 			return err
 		}
 	}
 
-	ctr, running, err := resolveProxyContainer(ctx, p.docker, p.project, p.serviceName, "nginx")
+	ctr, running, err := resolveProxyContainer(ctx, p.docker, p.project, p.serviceName, name)
 	if err != nil {
-		return fmt.Errorf("resolving nginx container: %w", err)
+		return fmt.Errorf("resolving %s container: %w", name, err)
 	}
 
-	if ctr.Labels["com.malico.docker-release.bundled-proxy"] != "nginx" && !matchesImage(ctr.Image, "nginx", "alpine") {
-		return fmt.Errorf("container %q has unexpected image %q (want nginx or alpine-based)", ctr.ID[:12], ctr.Image)
+	if ctr.Labels["com.malico.docker-release.bundled-proxy"] != name && !matchesImage(ctr.Image, name, "alpine") {
+		return fmt.Errorf("container %q has unexpected image %q (want %s or alpine-based)", ctr.ID[:12], ctr.Image, name)
 	}
 
 	if !running {
 		return p.docker.Start(ctx, ctr.ID)
 	}
 
-	if err := p.docker.Exec(ctx, ctr.ID, []string{"/usr/sbin/nginx", "-t"}); err != nil {
-		return fmt.Errorf("nginx rejected config; check its config and certificates: %w", err)
+	if err := p.docker.Exec(ctx, ctr.ID, []string{"/usr/sbin/" + name, "-t"}); err != nil {
+		return fmt.Errorf("%s rejected config; check its config and certificates: %w", name, err)
 	}
 	reload := func() error {
-		return p.docker.Exec(ctx, ctr.ID, []string{"/usr/sbin/nginx", "-s", "reload"})
+		return p.docker.Exec(ctx, ctr.ID, []string{"/usr/sbin/" + name, "-s", "reload"})
 	}
-	if ctr.Labels["com.malico.docker-release.bundled-proxy"] == "nginx" {
-		return confirmBundledNginxReload(ctx, reload)
+	if ctr.Labels["com.malico.docker-release.bundled-proxy"] == name {
+		return confirmBundledReload(ctx, name, reload)
 	}
 	return reload()
 }
@@ -153,21 +160,21 @@ func renderUpstream(state *UpstreamState) string {
 	return b.String()
 }
 
-func renderNginxServer(state *UpstreamState, route NginxRoute) string {
+func renderNginxServer(state *UpstreamState, route NginxRoute, proxyName string) string {
 	var b strings.Builder
 
 	if route.SSLCert != "" {
-		renderNginxServerBlock(&b, state, route, false, route.SSLRedirect)
+		renderNginxServerBlock(&b, state, route, proxyName, false, route.SSLRedirect)
 		b.WriteString("\n")
-		renderNginxServerBlock(&b, state, route, true, false)
+		renderNginxServerBlock(&b, state, route, proxyName, true, false)
 		return b.String()
 	}
 
-	renderNginxServerBlock(&b, state, route, false, false)
+	renderNginxServerBlock(&b, state, route, proxyName, false, false)
 	return b.String()
 }
 
-func renderNginxServerBlock(b *strings.Builder, state *UpstreamState, route NginxRoute, ssl, redirectOnly bool) {
+func renderNginxServerBlock(b *strings.Builder, state *UpstreamState, route NginxRoute, proxyName string, ssl, redirectOnly bool) {
 	fmt.Fprintf(b, "# Generated by docker-release\n")
 	fmt.Fprintf(b, "server {\n")
 	if ssl {
@@ -180,7 +187,8 @@ func renderNginxServerBlock(b *strings.Builder, state *UpstreamState, route Ngin
 	if ssl {
 		fmt.Fprintf(b, "    ssl_certificate %s;\n", route.SSLCert)
 		fmt.Fprintf(b, "    ssl_certificate_key %s;\n", route.SSLKey)
-		fmt.Fprintf(b, "    include /etc/docker-release/nginx/ssl.d/*.conf;\n")
+		fmt.Fprintf(b, "    include /etc/docker-release/%s/ssl.d/*.conf;\n", proxyName)
+		fmt.Fprintf(b, "    include /etc/docker-release/proxy/ssl.d/*.conf;\n")
 	}
 
 	fmt.Fprintf(b, "\n")
@@ -195,9 +203,11 @@ func renderNginxServerBlock(b *strings.Builder, state *UpstreamState, route Ngin
 	for _, line := range strings.Split(strings.TrimSuffix(renderNginxLocation(state, route), "\n"), "\n") {
 		fmt.Fprintf(b, "    %s\n", line)
 	}
-	fmt.Fprintf(b, "    include /etc/docker-release/nginx/server.d/*.conf;\n")
+	fmt.Fprintf(b, "    include /etc/docker-release/%s/server.d/*.conf;\n", proxyName)
+	fmt.Fprintf(b, "    include /etc/docker-release/proxy/server.d/*.conf;\n")
 	if ssl {
-		fmt.Fprintf(b, "    include /etc/docker-release/nginx/https.d/*.conf;\n")
+		fmt.Fprintf(b, "    include /etc/docker-release/%s/https.d/*.conf;\n", proxyName)
+		fmt.Fprintf(b, "    include /etc/docker-release/proxy/https.d/*.conf;\n")
 	}
 	fmt.Fprintf(b, "}\n")
 }

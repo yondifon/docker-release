@@ -1,0 +1,11 @@
+services:
+  docker-release:
+    ports:
+      - "${BUNDLE_TLS_PORT:-8443}:443"
+    volumes:
+      - ${PWD}/.oga_tmp/certs:/certs/nginx:ro
+  linear_app:
+    labels:
+      release.tls.cert: /certs/nginx/cert.pem
+      release.tls.key: /certs/nginx/key.pem
+      release.tls.redirect: "true"

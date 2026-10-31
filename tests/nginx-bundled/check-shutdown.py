@@ -1,33 +1,4 @@
-import json
 import pathlib
-import socket
-import subprocess
-import time
+import runpy
 
-
-def main():
-    root = pathlib.Path(__file__).resolve().parents[2]
-    connection = socket.create_connection(("127.0.0.1", 8089), timeout=2)
-    connection.sendall(b"G")
-    time.sleep(1)
-    started = time.monotonic()
-    try:
-        subprocess.run(
-            ["docker", "compose", "-f", "tests/nginx-bundled/docker-compose.yml",
-             "stop", "-t", "90", "docker-release"],
-            cwd=root, check=True, timeout=95,
-        )
-        elapsed = time.monotonic() - started
-        output = subprocess.check_output(
-            ["docker", "inspect", "nginx-bundled-docker-release-1"], text=True,
-        )
-        state = json.loads(output)[0]["State"]
-        assert state["ExitCode"] == 0, state
-        assert elapsed < 15, f"idle connection held shutdown for {elapsed:.2f}s"
-        print(f"PASS: incomplete headers did not force-kill nginx: exit=0, stop={elapsed:.2f}s")
-    finally:
-        connection.close()
-
-
-if __name__ == "__main__":
-    main()
+runpy.run_path(str(pathlib.Path(__file__).resolve().parents[1] / "bundled/check-shutdown.py"), run_name="__main__")
