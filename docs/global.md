@@ -34,6 +34,7 @@ services:
       DR_ALL_PROJECTS: "true"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/myapp:/srv/myapp:ro
       - nginx-tmpl:/shared/nginx-tmpl:rw
       - docker-release-state:/var/lib/docker-release
     healthcheck:
@@ -59,6 +60,8 @@ volumes:
   nginx-tmpl:
   docker-release-state:
 ```
+
+Mount each app stack's project directory at its host path, one line per project (`/srv/myapp` above). This lets a release start new containers with `docker compose`, so changes to that stack's Compose file apply. Without the mount, the controller copies the running container: the new image's settings apply, but Compose file changes do not.
 
 Start this once. It runs permanently on the server.
 

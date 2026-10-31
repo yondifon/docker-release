@@ -43,6 +43,7 @@ services:
     image: malico/docker-release:latest
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - .:${PWD}:ro
       - nginx-tmpl:/shared/nginx-tmpl:rw
     healthcheck:
       test: ["CMD", "dr", "healthcheck"]
@@ -77,6 +78,8 @@ services:
 volumes:
   nginx-tmpl:
 ```
+
+The `.:${PWD}:ro` mount lets a release start the new containers with `docker compose`, so changes to your Compose file apply. Run `docker compose` from the project directory. Without it, the controller copies the running container: the new image's settings apply, but Compose file changes do not.
 
 ```sh
 docker compose up -d

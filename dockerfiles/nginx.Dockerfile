@@ -1,3 +1,4 @@
+ARG COMPOSE_VERSION=v2.40.3
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 ARG VERSION=dev
 ARG TARGETOS
@@ -8,6 +9,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags bundled_nginx -ldflags="-s -w -X main.version=${VERSION}" -o /bin/dr ./cmd/docker-release/
 
+FROM docker/compose-bin:${COMPOSE_VERSION} AS compose
+
 FROM alpine:3.23 AS runtime
 
 RUN apk add --no-cache ca-certificates nginx tini \
@@ -17,6 +20,7 @@ RUN apk add --no-cache ca-certificates nginx tini \
     /etc/docker-release/nginx/https.d
 
 COPY --from=builder /bin/dr /usr/local/bin/dr
+COPY --from=compose /docker-compose /usr/local/bin/docker-compose
 COPY packaging/nginx/nginx.conf /etc/nginx/nginx.conf
 RUN nginx -t
 
