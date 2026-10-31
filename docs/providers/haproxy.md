@@ -2,6 +2,44 @@
 
 Use this when your app runs behind HAProxy.
 
+Choose the bundle for one service with routing labels, or keep HAProxy separate and manage your own frontend rules.
+
+## Bundled image
+
+Use `malico/docker-release-haproxy:<version>` with the [shared bundle setup](../bundled-images.md). Keep the same app labels, ports, and state mount as the Nginx, Angie, and Caddy bundles. You do not need `release.provider`, a HAProxy config file, or a shared config volume.
+
+The bundle routes each hostname and strips `release.path` before forwarding. Mounted certificates, separate private keys, and HTTP 308 redirects use the shared TLS labels. HAProxy does not obtain or renew certificates for you.
+
+App releases keep client connections open while new requests use the replacement containers. Set `release.drain_timeout` long enough for your app's requests to finish before an old container stops.
+
+For a custom frontend, set `DR_PROXY_SKIP_CONFIG=true` and mount your config at `/usr/local/etc/haproxy/haproxy.cfg:ro`. The bundle loads backend files from `/shared/haproxy-config`; reference `<service>_be` in your frontend rules. Shared routing labels do not add routes in this mode.
+
+Keep these entries in your custom config so health checks and app releases work:
+
+```haproxy
+global
+    stats socket /run/haproxy/admin.sock mode 600 level admin
+    user haproxy
+    group haproxy
+
+defaults
+    mode http
+    timeout connect 5s
+    timeout client 30s
+    timeout server 30s
+    timeout http-request 5s
+    timeout http-keep-alive 5s
+
+frontend http
+    bind :80
+    http-request return status 200 if { path /health }
+    default_backend app_be
+```
+
+Do not expose the HAProxy control sockets over TCP.
+
+## Separate HAProxy service
+
 `docker-release` writes backend files to a shared volume and reloads HAProxy after each deploy. You write the `frontend` rules — `docker-release` only manages the `backend` blocks.
 
 ## What Gets Written

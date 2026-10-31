@@ -1,6 +1,6 @@
 # Bundle checks
 
-Run commands from the repo root. The Angie fixture uses HTTP port 8090; Nginx uses 8089; Caddy uses 8091 and HTTPS port 8444. All use the same app image and shared labels.
+Run commands from the repo root. The Angie fixture uses HTTP port 8090; Nginx uses 8089; Caddy uses 8091 and HTTPS port 8444; HAProxy uses 8092. All use the same app image and shared labels.
 
 ```sh
 docker compose -f tests/angie-bundled/docker-compose.yml up --build -d --wait
@@ -11,6 +11,8 @@ docker compose -f tests/angie-bundled/docker-compose.yml down -v
 ```
 
 For Nginx, replace `angie` with `nginx` in each command. The reload check pauses the proxy master for 12 seconds while workers keep serving requests and checks that the old `linear_app` container survives until the reload is accepted. It then checks canary and blue/green releases too. The shutdown check stops the controller with an incomplete HTTP request open and requires exit 0 within 15 seconds.
+
+For HAProxy, replace `angie` with `haproxy` in each command. Its fixture also checks a hostless path route. App releases use the Runtime API without reloading the proxy, so the paused-master check does not apply. HAProxy must confirm backend changes before the old app container stops.
 
 For Caddy, run its checks instead of the paused-master check. Caddy serves requests and applies config in one process:
 
@@ -46,6 +48,21 @@ docker compose -f tests/angie-bundled/docker-compose.yml \
 ```
 
 The check trusts only the supplied certificate and verifies HTTP 308 to HTTPS, certificate validation, and HTTPS 200. The mount path contains `/nginx/` so both bundles must preserve certificate paths unchanged.
+
+The same TLS commands work with `haproxy` in place of `angie`. HAProxy reads the certificate and key separately; you do not need to combine them into one PEM file.
+
+To check HTTP and HTTPS traffic through every HAProxy release strategy, include all three app names in the certificate's `subjectAltName`: `DNS:linear.localhost,DNS:canary.localhost,DNS:bluegreen.localhost,IP:127.0.0.1`. Then run:
+
+```sh
+docker compose -f tests/haproxy-bundled/docker-compose.yml \
+  -f tests/haproxy-bundled/tls.yml up -d --wait
+python3 tests/haproxy-bundled/check.py
+python3 tests/bundled/check-shutdown.py haproxy
+docker compose -f tests/haproxy-bundled/docker-compose.yml \
+  -f tests/haproxy-bundled/tls.yml down -v
+```
+
+This also checks in-flight requests, listening sockets, and recovery after a rejected certificate.
 
 Run the reload check on the HTTP fixture, not the TLS overlay: it expects HTTP 200, not a redirect. Set `BUNDLE_TLS_PORT=8444` on Compose commands and use `--tls-port 8444` to test both TLS stacks at once.
 

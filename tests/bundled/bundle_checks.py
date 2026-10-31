@@ -10,7 +10,7 @@ import time
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-PORTS = {"nginx": 8089, "angie": 8090, "caddy": 8091}
+PORTS = {"nginx": 8089, "angie": 8090, "caddy": 8091, "haproxy": 8092}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -42,7 +42,7 @@ class Bundle:
         self.context = context
         self.tls_port = tls_port
         self.routes = list(ROUTES)
-        if proxy == "caddy":
+        if proxy in ["caddy", "haproxy"]:
             self.routes.append(Route("path_app", "localhost", "/path/", "path"))
         self.compose = ["docker", "compose", "-f", f"tests/{proxy}-bundled/docker-compose.yml"]
         self.controller = f"{proxy}-bundled-docker-release-1"
@@ -62,7 +62,7 @@ class Bundle:
         connection.request("GET", path, headers={"Host": host or route.host})
         response = connection.getresponse()
         body = response.read()
-        return connection, response.status, body, dict(response.getheaders())
+        return connection, response.status, body, response.headers
 
     def check_response(self, route, suffix, secure=False, connection=None):
         connection, status, body, _ = self.exchange(route, route.prefix + suffix, secure, connection)
@@ -71,6 +71,9 @@ class Bundle:
         if f"Name: {route.name}" not in lines:
             raise WrongBackend((route.service, "wrong app body", body))
         assert f"GET /{suffix} HTTP/1.1" in lines, (route.service, "path was not stripped", body)
+        if self.proxy == "haproxy":
+            scheme = "https" if secure else "http"
+            assert f"X-Forwarded-Proto: {scheme}" in lines, ("wrong forwarded scheme", body)
         return connection
 
     def container_ids(self, service):
@@ -88,6 +91,11 @@ def check_routing(bundle, tls_routes=None, redirect=False):
                 connection.close()
                 assert status == 308, (route.service, status)
                 assert headers["Location"] == f"https://{route.host}{route.prefix}{suffix}", headers
+                connection, status, _, headers = bundle.exchange(
+                    route, route.prefix + suffix, host=f"{route.host}:{PORTS[bundle.proxy]}",
+                )
+                connection.close()
+                assert status == 308 and headers["Location"] == f"https://{route.host}{route.prefix}{suffix}", headers
             else:
                 bundle.check_response(route, suffix).close()
     tls_routes = tls_routes if tls_routes is not None else bundle.routes[:3]
@@ -151,8 +159,9 @@ def check_releases(bundle):
             for route in bundle.routes:
                 old = bundle.container_ids(route.service)
                 assert len(old) == 1, (route.service, old)
-                if route.service == "linear_app" and bundle.proxy != "caddy":
-                    master = command("docker", "exec", bundle.controller, "cat", f"/run/{bundle.proxy}/{bundle.proxy}.pid")
+                if route.service == "linear_app" and bundle.proxy in ["nginx", "angie"]:
+                    pid_path = f"/run/{bundle.proxy}/{bundle.proxy}.pid"
+                    master = command("docker", "exec", bundle.controller, "cat", pid_path)
                     process = None
                     command("docker", "exec", bundle.controller, "kill", "-STOP", master)
                     try:

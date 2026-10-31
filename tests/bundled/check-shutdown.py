@@ -8,10 +8,10 @@ import time
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("proxy", choices=["nginx", "angie", "caddy"], nargs="?", default="nginx")
+    parser.add_argument("proxy", choices=["nginx", "angie", "caddy", "haproxy"], nargs="?", default="nginx")
     proxy = parser.parse_args().proxy
     root = pathlib.Path(__file__).resolve().parents[2]
-    port = {"nginx": 8089, "angie": 8090, "caddy": 8091}[proxy]
+    port = {"nginx": 8089, "angie": 8090, "caddy": 8091, "haproxy": 8092}[proxy]
     connection = socket.create_connection(("127.0.0.1", port), timeout=2)
     connection.sendall(b"G")
     time.sleep(1)
