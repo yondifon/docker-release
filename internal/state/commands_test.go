@@ -1,6 +1,8 @@
 package state
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -119,5 +121,24 @@ func TestScanAllPendingCommandsEmptyDir(t *testing.T) {
 	}
 	if len(all) != 0 {
 		t.Errorf("len = %d, want 0", len(all))
+	}
+}
+
+func TestEnqueueReleaseCommandRejectsPathTraversal(t *testing.T) {
+	base := t.TempDir()
+	stateDir := filepath.Join(base, "state")
+
+	for _, m := range []*Manager{NewManager(stateDir, "../../escape"), NewManager(stateDir, "demo")} {
+		service := "app"
+		if m.project == "demo" {
+			service = "../../escape"
+		}
+		if _, err := m.EnqueueReleaseCommand(service, false); err == nil {
+			t.Errorf("enqueue accepted project %q service %q", m.project, service)
+		}
+	}
+
+	if entries, _ := os.ReadDir(base); len(entries) != 0 {
+		t.Errorf("enqueue created files outside the state dir: %v", entries)
 	}
 }
