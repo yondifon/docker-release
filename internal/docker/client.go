@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
+	"reflect"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +19,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/go-connections/nat"
 )
 
 type Client struct {
@@ -24,6 +29,8 @@ type Client struct {
 const (
 	imageTitleLabel   = "org.opencontainers.image.title"
 	bundledProxyLabel = "com.malico.docker-release.bundled-proxy"
+
+	composeContainerNumberLabel = "com.docker.compose.container-number"
 )
 
 func NewClient() (*Client, error) {
@@ -238,31 +245,27 @@ func (c *Client) MaxServiceContainerNumber(ctx context.Context, project, service
 	return max
 }
 
+// CreateContainerFromImage starts a copy of ref from the image its tag points
+// at now. The copy gets the new image's defaults (env, command, labels, health
+// check, ...) with only the settings the container set itself laid over them.
+// ListServiceContainers lists every container of a Compose service, running or not.
+func (c *Client) ListServiceContainers(ctx context.Context, project, service string) ([]types.Container, error) {
+	f := filters.NewArgs()
+	f.Add("label", "com.docker.compose.service="+service)
+	if project != "" {
+		f.Add("label", composeProjectLabel+"="+project)
+	}
+	return c.api.ContainerList(ctx, container.ListOptions{All: true, Filters: f})
+}
+
 func (c *Client) CreateContainerFromImage(ctx context.Context, ref types.Container, num int) (string, error) {
 	refInfo, err := c.api.ContainerInspect(ctx, ref.ID)
 	if err != nil {
 		return "", fmt.Errorf("inspecting reference container: %w", err)
 	}
 
-	labels := make(map[string]string, len(ref.Labels))
-	for k, v := range ref.Labels {
-		labels[k] = v
-	}
-	labels["com.docker.compose.container-number"] = strconv.Itoa(num)
-
-	cfg := *refInfo.Config
-	cfg.Labels = labels
-
-	primaryNet, primaryNetID := primaryNetwork(ref)
-
-	var networkCfg *network.NetworkingConfig
-	if primaryNet != "" {
-		networkCfg = &network.NetworkingConfig{
-			EndpointsConfig: map[string]*network.EndpointSettings{
-				primaryNet: {NetworkID: primaryNetID},
-			},
-		}
-	}
+	cfg := c.ownConfig(ctx, refInfo)
+	cfg.Labels[composeContainerNumberLabel] = strconv.Itoa(num)
 
 	var hostCfg *container.HostConfig
 	if refInfo.HostConfig != nil {
@@ -271,18 +274,24 @@ func (c *Client) CreateContainerFromImage(ctx context.Context, ref types.Contain
 		hostCfg = &copied
 	}
 
+	endpoints := cloneEndpoints(refInfo)
+	var networkCfg *network.NetworkingConfig
+	if len(endpoints) > 0 {
+		primary := primaryNetwork(refInfo, endpoints)
+		networkCfg = &network.NetworkingConfig{
+			EndpointsConfig: map[string]*network.EndpointSettings{primary: endpoints[primary]},
+		}
+		delete(endpoints, primary)
+	}
+
 	name := nextContainerName(ref, num)
-	resp, err := c.api.ContainerCreate(ctx, &cfg, hostCfg, networkCfg, nil, name)
+	resp, err := c.api.ContainerCreate(ctx, cfg, hostCfg, networkCfg, nil, name)
 	if err != nil {
 		return "", fmt.Errorf("creating container: %w", err)
 	}
 
-	for name, endpoint := range ref.NetworkSettings.Networks {
-		if name == primaryNet {
-			continue
-		}
-		err := c.api.NetworkConnect(ctx, endpoint.NetworkID, resp.ID, nil)
-		if err != nil {
+	for _, name := range sortedKeys(endpoints) {
+		if err := c.api.NetworkConnect(ctx, endpoints[name].NetworkID, resp.ID, endpoints[name]); err != nil {
 			_ = c.api.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
 			return "", fmt.Errorf("connecting to network %s: %w", name, err)
 		}
@@ -296,6 +305,73 @@ func (c *Client) CreateContainerFromImage(ctx context.Context, ref types.Contain
 	return resp.ID, nil
 }
 
+// ownConfig returns the settings the container set itself, so Docker fills the
+// rest from the image the tag points at now. A setting that equals the old
+// image's value came from that image and is left out. When the old image can't
+// be read, the container's whole config is kept.
+func (c *Client) ownConfig(ctx context.Context, info types.ContainerJSON) *container.Config {
+	cfg := *info.Config
+	cfg.Labels = make(map[string]string, len(info.Config.Labels)+1)
+	for k, v := range info.Config.Labels {
+		cfg.Labels[k] = v
+	}
+	if info.ID != "" && len(info.ID) >= 12 && cfg.Hostname == info.ID[:12] {
+		cfg.Hostname = ""
+	}
+
+	oldImage, _, err := c.api.ImageInspectWithRaw(ctx, info.Image)
+	if err != nil || oldImage.Config == nil {
+		slog.Warn("old image not readable; copying the container's whole config", "component", "docker", "image", info.Image, "err", err)
+		return &cfg
+	}
+	base := oldImage.Config
+
+	cfg.Env = nil
+	for _, kv := range info.Config.Env {
+		if !slices.Contains(base.Env, kv) {
+			cfg.Env = append(cfg.Env, kv)
+		}
+	}
+	for k, v := range base.Labels {
+		if cfg.Labels[k] == v {
+			delete(cfg.Labels, k)
+		}
+	}
+	cfg.ExposedPorts = nat.PortSet{}
+	for port := range info.Config.ExposedPorts {
+		if _, ok := base.ExposedPorts[port]; !ok {
+			cfg.ExposedPorts[port] = struct{}{}
+		}
+	}
+	cfg.Volumes = map[string]struct{}{}
+	for path := range info.Config.Volumes {
+		if _, ok := base.Volumes[path]; !ok {
+			cfg.Volumes[path] = struct{}{}
+		}
+	}
+	// A command only counts as inherited together with the entrypoint: Docker
+	// drops the image command when the container sets its own entrypoint.
+	if slices.Equal(info.Config.Entrypoint, base.Entrypoint) {
+		cfg.Entrypoint = nil
+		if slices.Equal(info.Config.Cmd, base.Cmd) {
+			cfg.Cmd = nil
+		}
+	}
+	if reflect.DeepEqual(info.Config.Healthcheck, base.Healthcheck) {
+		cfg.Healthcheck = nil
+	}
+	if cfg.WorkingDir == base.WorkingDir {
+		cfg.WorkingDir = ""
+	}
+	if cfg.User == base.User {
+		cfg.User = ""
+	}
+	if cfg.StopSignal == base.StopSignal {
+		cfg.StopSignal = ""
+	}
+	return &cfg
+}
+
 func nextContainerName(ref types.Container, num int) string {
 	for _, name := range ref.Names {
 		n := strings.TrimPrefix(name, "/")
@@ -306,37 +382,105 @@ func nextContainerName(ref types.Container, num int) string {
 		}
 	}
 
-	project := ref.Labels["com.docker.compose.project"]
+	project := ref.Labels[composeProjectLabel]
 	service := ref.Labels["com.docker.compose.service"]
 	return fmt.Sprintf("%s-%s-%d", project, service, num)
 }
 
-func primaryNetwork(ref types.Container) (name string, id string) {
-	if ref.NetworkSettings == nil {
-		return "", ""
+// cloneEndpoints returns one endpoint per network the container is on, keeping
+// its aliases but not its own name or ID, and not its address.
+func cloneEndpoints(info types.ContainerJSON) map[string]*network.EndpointSettings {
+	if info.NetworkSettings == nil || networkModeHasNoEndpoints(info) {
+		return nil
 	}
 
-	for n, endpoint := range ref.NetworkSettings.Networks {
-		return n, endpoint.NetworkID
+	own := map[string]bool{strings.TrimPrefix(info.Name, "/"): true, info.ID: true}
+	if len(info.ID) >= 12 {
+		own[info.ID[:12]] = true
 	}
 
-	return "", ""
+	endpoints := make(map[string]*network.EndpointSettings, len(info.NetworkSettings.Networks))
+	for name, endpoint := range info.NetworkSettings.Networks {
+		var aliases []string
+		for _, alias := range endpoint.Aliases {
+			if !own[alias] {
+				aliases = append(aliases, alias)
+			}
+		}
+		endpoints[name] = &network.EndpointSettings{NetworkID: endpoint.NetworkID, Aliases: aliases}
+	}
+	return endpoints
 }
 
-func (c *Client) ContainerAddr(ctx context.Context, containerID string) (string, error) {
+func networkModeHasNoEndpoints(info types.ContainerJSON) bool {
+	if info.HostConfig == nil {
+		return false
+	}
+	mode := info.HostConfig.NetworkMode
+	return mode.IsHost() || mode.IsNone() || mode.IsContainer()
+}
+
+// primaryNetwork is the network named by the container's network mode, else the
+// first one by name.
+func primaryNetwork(info types.ContainerJSON, endpoints map[string]*network.EndpointSettings) string {
+	if info.HostConfig != nil {
+		if _, ok := endpoints[string(info.HostConfig.NetworkMode)]; ok {
+			return string(info.HostConfig.NetworkMode)
+		}
+	}
+	return sortedKeys(endpoints)[0]
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// ContainerAddrVia returns the container's upstream address using an IP on a
+// network that proxyID is also on. With no proxyID, any network will do.
+func (c *Client) ContainerAddrVia(ctx context.Context, containerID, proxyID string) (string, error) {
 	info, err := c.api.ContainerInspect(ctx, containerID)
 	if err != nil {
 		return "", fmt.Errorf("inspecting container: %w", err)
 	}
 
-	for _, network := range info.NetworkSettings.Networks {
-		if network.IPAddress != "" {
-			port := firstExposedPort(info)
-			return fmt.Sprintf("%s:%s", network.IPAddress, port), nil
+	var proxyNetworks map[string]bool
+	if proxyID != "" {
+		proxy, err := c.api.ContainerInspect(ctx, proxyID)
+		if err != nil {
+			return "", fmt.Errorf("inspecting proxy container: %w", err)
+		}
+		if !networkModeHasNoEndpoints(proxy) {
+			proxyNetworks = networkIDs(proxy)
 		}
 	}
 
+	for _, name := range sortedKeys(info.NetworkSettings.Networks) {
+		endpoint := info.NetworkSettings.Networks[name]
+		if endpoint.IPAddress == "" || (proxyNetworks != nil && !proxyNetworks[endpoint.NetworkID]) {
+			continue
+		}
+		return fmt.Sprintf("%s:%s", endpoint.IPAddress, firstExposedPort(info)), nil
+	}
+
+	if proxyNetworks != nil {
+		return "", fmt.Errorf("container %s shares no network with the proxy", containerID[:12])
+	}
 	return "", fmt.Errorf("no network address for container %s", containerID[:12])
+}
+
+func networkIDs(info types.ContainerJSON) map[string]bool {
+	ids := make(map[string]bool)
+	if info.NetworkSettings != nil {
+		for _, endpoint := range info.NetworkSettings.Networks {
+			ids[endpoint.NetworkID] = true
+		}
+	}
+	return ids
 }
 
 // firstExposedPort returns the lowest-numbered exposed port so the chosen

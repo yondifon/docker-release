@@ -76,8 +76,14 @@ func (c *Controller) deploy(parentCtx context.Context, key serviceKey, cfg *conf
 
 	resolveAddr := cfg.Provider != config.ProviderNone
 
-	oldInfos := c.resolveContainers(ctx, oldContainers, resolveAddr)
-	newInfos := c.resolveContainers(ctx, newContainers, resolveAddr)
+	addrs := c.addrResolver(ctx, cfg)
+	oldInfos, _ := c.resolveContainers(ctx, addrs, oldContainers, resolveAddr)
+	newInfos, err := c.resolveContainers(ctx, addrs, newContainers, resolveAddr)
+	if err != nil {
+		slog.Error("new containers are not reachable by the proxy; keeping the old ones", "component", "controller", "service", dKey, "err", err)
+		c.discardNew(ctx, key, cfg, mgr, oldContainers, newContainers)
+		return
+	}
 
 	d := &strategy.Deployment{
 		Service:      key.service,
@@ -287,16 +293,20 @@ func (c *Controller) listContainersByRevision(ctx context.Context, key serviceKe
 	return matched
 }
 
-func (c *Controller) resolveContainers(ctx context.Context, containers []types.Container, resolveAddr bool) []strategy.ContainerInfo {
+// resolveContainers returns the containers whose upstream address could be
+// resolved, and an error naming those whose address could not.
+func (c *Controller) resolveContainers(ctx context.Context, addrs proxyAddrs, containers []types.Container, resolveAddr bool) ([]strategy.ContainerInfo, error) {
 	var infos []strategy.ContainerInfo
+	var failed error
 
 	for _, ctr := range containers {
 		info := strategy.ContainerInfo{ID: ctr.ID}
 
 		if resolveAddr {
-			addr, err := c.docker.ContainerAddr(ctx, ctr.ID)
+			addr, err := addrs.ContainerAddr(ctx, ctr.ID)
 			if err != nil {
 				slog.Warn("resolving container address failed", "component", "controller", "container", ctr.ID[:12], "err", err)
+				failed = errors.Join(failed, err)
 				continue
 			}
 			info.Addr = addr
@@ -305,5 +315,31 @@ func (c *Controller) resolveContainers(ctx context.Context, containers []types.C
 		infos = append(infos, info)
 	}
 
-	return infos
+	return infos, failed
+}
+
+// discardNew removes containers that never took traffic and leaves the old
+// ones serving.
+func (c *Controller) discardNew(ctx context.Context, key serviceKey, cfg *config.ServiceConfig, mgr *state.Manager, old, discarded []types.Container) {
+	for _, ctr := range discarded {
+		if err := c.docker.Stop(ctx, ctr.ID, 10); err != nil {
+			slog.Warn("stop failed", "component", "controller", "container", ctr.ID[:12], "err", err)
+		}
+		if err := c.docker.Remove(ctx, ctr.ID); err != nil {
+			slog.Warn("remove failed", "component", "controller", "container", ctr.ID[:12], "err", err)
+		}
+	}
+
+	ids := make([]string, len(old))
+	for i, ctr := range old {
+		ids[i] = ctr.ID
+	}
+	if err := mgr.Save(&state.DeploymentState{
+		Service:    key.service,
+		Status:     state.StatusIdle,
+		Strategy:   string(cfg.Strategy),
+		Containers: state.Containers{Stable: ids},
+	}); err != nil {
+		slog.Error("error saving state", "component", "controller", "service", key.deployKey(), "err", err)
+	}
 }

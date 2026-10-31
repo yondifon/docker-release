@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/malico/docker-release/internal/config"
+	"github.com/malico/docker-release/internal/docker"
 	"github.com/malico/docker-release/internal/state"
 
 	"github.com/docker/docker/api/types"
@@ -136,14 +137,11 @@ func (c *Controller) Release(ctx context.Context, project, service string, force
 		return nil
 	}
 
-	cfg, err := config.ParseLabels(serviceContainers[0].Labels)
-	if err != nil {
+	if _, err := config.ParseLabels(serviceContainers[0].Labels); err != nil {
 		return fmt.Errorf("parsing labels: %w", err)
 	}
 
-	c.resolveNginxProxyUpstream(ctx, cfg, serviceContainers)
-
-	newContainers, err := c.scaleUp(ctx, key, serviceContainers)
+	newContainers, cfg, err := c.scaleUp(ctx, key, serviceContainers)
 	if err != nil {
 		return fmt.Errorf("scaling up: %w", err)
 	}
@@ -159,8 +157,125 @@ func (c *Controller) Release(ctx context.Context, project, service string, force
 	return nil
 }
 
-func (c *Controller) scaleUp(ctx context.Context, key serviceKey, existing []types.Container) ([]types.Container, error) {
-	slog.Info("scaling up: creating containers from image", "component", "controller", "count", len(existing))
+// scaleUp starts one replacement for each existing container and returns them
+// with the service config read from their labels. It lets Docker Compose create
+// them when the project's files are readable here, so they get what `docker
+// compose up` would give them; otherwise it copies the running containers.
+// Replacements the proxy can't reach are removed and reported as an error.
+func (c *Controller) scaleUp(ctx context.Context, key serviceKey, existing []types.Container) ([]types.Container, *config.ServiceConfig, error) {
+	var created []string
+	var err error
+	if project, ok := c.composeProject(key, existing[0]); ok {
+		created, err = c.composeScaleUp(ctx, key, project, existing)
+	} else {
+		created, err = c.cloneScaleUp(ctx, existing, key)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	removeNew := func() {
+		for _, id := range created {
+			_ = c.docker.Remove(context.Background(), id)
+		}
+	}
+
+	// Filter using the explicit project so global mode doesn't accidentally
+	// include same-named services from other projects.
+	allContainers, err := c.docker.ListManagedContainers(ctx, key.project)
+	if err != nil {
+		removeNew()
+		return nil, nil, fmt.Errorf("listing containers: %w", err)
+	}
+
+	createdSet := make(map[string]bool, len(created))
+	for _, id := range created {
+		createdSet[id] = true
+	}
+	var newContainers []types.Container
+	for _, ctr := range allContainers {
+		if createdSet[ctr.ID] {
+			newContainers = append(newContainers, ctr)
+		}
+	}
+	if len(newContainers) != len(existing) {
+		removeNew()
+		return nil, nil, fmt.Errorf("expected %d new containers, found %d; check that the service keeps its release.enable label", len(existing), len(newContainers))
+	}
+
+	cfg, err := config.ParseLabels(newContainers[0].Labels)
+	if err != nil {
+		removeNew()
+		return nil, nil, fmt.Errorf("parsing labels: %w", err)
+	}
+	c.resolveNginxProxyUpstream(ctx, cfg, newContainers)
+
+	if _, err := c.resolveContainers(ctx, c.addrResolver(ctx, cfg), newContainers, cfg.Provider != config.ProviderNone); err != nil {
+		removeNew()
+		return nil, nil, fmt.Errorf("new containers are not reachable by the proxy: %w", err)
+	}
+
+	return newContainers, cfg, nil
+}
+
+// composeProject returns the Compose project of a container when Compose can
+// be run for it from here. When it can't, it logs why, once per service.
+func (c *Controller) composeProject(key serviceKey, ctr types.Container) (docker.ComposeProject, bool) {
+	project, ok := docker.ComposeProjectOf(ctr.Labels)
+	if !ok {
+		return project, false
+	}
+	if err := project.Available(); err != nil {
+		if _, logged := c.composeWarned.LoadOrStore(key, true); !logged {
+			slog.Warn("compose files are not mounted in the controller; copying the running container, so compose file changes will not apply", "component", "controller", "service", key.deployKey(), "err", err)
+		}
+		return project, false
+	}
+	return project, true
+}
+
+func (c *Controller) composeScaleUp(ctx context.Context, key serviceKey, project docker.ComposeProject, existing []types.Container) ([]string, error) {
+	slog.Info("scaling up: creating containers with docker compose", "component", "controller", "service", key.deployKey(), "count", len(existing))
+
+	before, err := c.serviceContainerIDs(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	runErr := c.docker.ScaleService(ctx, project, key.service, len(existing)*2)
+
+	after, err := c.serviceContainerIDs(ctx, key)
+	if err != nil && runErr == nil {
+		runErr = err
+	}
+	var created []string
+	for id := range after {
+		if !before[id] {
+			created = append(created, id)
+		}
+	}
+	if runErr != nil {
+		for _, id := range created {
+			_ = c.docker.Remove(context.Background(), id)
+		}
+		return nil, runErr
+	}
+	return created, nil
+}
+
+func (c *Controller) serviceContainerIDs(ctx context.Context, key serviceKey) (map[string]bool, error) {
+	containers, err := c.docker.ListServiceContainers(ctx, key.project, key.service)
+	if err != nil {
+		return nil, fmt.Errorf("listing containers: %w", err)
+	}
+	ids := make(map[string]bool, len(containers))
+	for _, ctr := range containers {
+		ids[ctr.ID] = true
+	}
+	return ids, nil
+}
+
+func (c *Controller) cloneScaleUp(ctx context.Context, existing []types.Container, key serviceKey) ([]string, error) {
+	slog.Info("scaling up: copying running containers", "component", "controller", "count", len(existing))
 
 	maxNum := c.docker.MaxServiceContainerNumber(ctx, key.project, key.service)
 
@@ -175,25 +290,5 @@ func (c *Controller) scaleUp(ctx context.Context, key serviceKey, existing []typ
 		}
 		newIDs = append(newIDs, newID)
 	}
-
-	newIDSet := make(map[string]bool, len(newIDs))
-	for _, id := range newIDs {
-		newIDSet[id] = true
-	}
-
-	// Filter using the explicit project so global mode doesn't accidentally
-	// include same-named services from other projects.
-	allContainers, err := c.docker.ListManagedContainers(ctx, key.project)
-	if err != nil {
-		return nil, fmt.Errorf("listing containers: %w", err)
-	}
-
-	var newContainers []types.Container
-	for _, ctr := range allContainers {
-		if newIDSet[ctr.ID] {
-			newContainers = append(newContainers, ctr)
-		}
-	}
-
-	return newContainers, nil
+	return newIDs, nil
 }
