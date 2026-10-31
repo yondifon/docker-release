@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -256,6 +257,7 @@ func (c *ServiceConfig) validate() error {
 
 	if c.RouteHost != "" {
 		for _, host := range strings.Split(c.RouteHost, ",") {
+			// Trim spaces only: a newline or other whitespace must fail the check below.
 			host = strings.Trim(host, " ")
 			if strings.HasPrefix(host, "*.") {
 				host = strings.TrimPrefix(host, "*.")
@@ -286,21 +288,12 @@ func (c *ServiceConfig) validate() error {
 		if p == "" {
 			continue
 		}
-		if containsDotDot(p) || !validTLSPath.MatchString(p) || hasAnyPrefix(p, tlsPathBlockedPrefixes) {
+		if containsDotDot(p) || !validTLSPath.MatchString(p) || slices.ContainsFunc(tlsPathBlockedPrefixes, func(prefix string) bool { return strings.HasPrefix(p, prefix) }) {
 			return fmt.Errorf("TLS paths must be absolute and contain only letters, numbers, /, ., _, +, @, %% or -")
 		}
 	}
 
 	return nil
-}
-
-func hasAnyPrefix(s string, prefixes []string) bool {
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(s, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func containsDotDot(p string) bool {
