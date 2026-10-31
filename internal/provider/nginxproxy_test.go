@@ -355,3 +355,24 @@ func TestNginxProxyBackupSkippedWithIpHash(t *testing.T) {
 		}
 	}
 }
+
+func TestNginxProxyKeepsSameServiceNameFromTwoProjects(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nginx.tmpl")
+	os.WriteFile(path, []byte(stockTemplate), 0o644)
+
+	p := NewNginxProxyFromString(path, stockTemplate)
+	ctx := context.Background()
+
+	// Two projects, both with a service called "app", routed by different hosts.
+	p.GenerateConfig(ctx, &UpstreamState{Service: "app", UpstreamName: "alpha.example.com", Servers: []Server{{Addr: "172.18.0.5:80"}}})
+	p.GenerateConfig(ctx, &UpstreamState{Service: "app", UpstreamName: "beta.example.com", Servers: []Server{{Addr: "172.18.0.9:80"}}})
+
+	data, _ := os.ReadFile(path)
+	content := string(data)
+	for _, want := range []string{"alpha.example.com", "172.18.0.5:80", "beta.example.com", "172.18.0.9:80"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("template lost %q after the second project deployed", want)
+		}
+	}
+}
