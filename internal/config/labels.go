@@ -14,6 +14,10 @@ var validRoutePath = regexp.MustCompile(`^/[a-zA-Z0-9._~/%-]*$`)
 var validRouteHost = regexp.MustCompile(`^[a-zA-Z0-9_](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9_])?$`)
 var validTLSPath = regexp.MustCompile(`^/[a-zA-Z0-9/._+@%-]+$`)
 
+// Cert and key files are read by the controller, so device and kernel files
+// such as /dev/zero must not be accepted.
+var tlsPathBlockedPrefixes = []string{"/dev/", "/proc/", "/sys/"}
+
 type Strategy string
 
 const (
@@ -252,7 +256,7 @@ func (c *ServiceConfig) validate() error {
 
 	if c.RouteHost != "" {
 		for _, host := range strings.Split(c.RouteHost, ",") {
-			host = strings.TrimSpace(host)
+			host = strings.Trim(host, " ")
 			if strings.HasPrefix(host, "*.") {
 				host = strings.TrimPrefix(host, "*.")
 			} else {
@@ -282,12 +286,21 @@ func (c *ServiceConfig) validate() error {
 		if p == "" {
 			continue
 		}
-		if containsDotDot(p) || !validTLSPath.MatchString(p) {
+		if containsDotDot(p) || !validTLSPath.MatchString(p) || hasAnyPrefix(p, tlsPathBlockedPrefixes) {
 			return fmt.Errorf("TLS paths must be absolute and contain only letters, numbers, /, ., _, +, @, %% or -")
 		}
 	}
 
 	return nil
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsDotDot(p string) bool {
