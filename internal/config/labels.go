@@ -242,6 +242,10 @@ func (c *ServiceConfig) validate() error {
 		return fmt.Errorf("upstream name %q must match [a-zA-Z0-9._-]+", c.UpstreamName)
 	}
 
+	if c.AngieStickyLearnName != "" && !validUpstreamName.MatchString(c.AngieStickyLearnName) {
+		return fmt.Errorf("angie sticky learn name %q must match [a-zA-Z0-9._-]+", c.AngieStickyLearnName)
+	}
+
 	if c.RoutePath != "" && !validRoutePath.MatchString(c.RoutePath) {
 		return fmt.Errorf("release.path %q must start with / and contain only URL path characters", c.RoutePath)
 	}
