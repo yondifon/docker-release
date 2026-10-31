@@ -57,11 +57,11 @@ func New(dockerClient *docker.Client, stateManager *state.Manager, project strin
 	}
 }
 
-// effectiveProject returns the project to use for an operation. When project
-// is "" and the controller is in per-project mode, c.project is used so CLI
-// callers don't need to repeat the project name.
+// effectiveProject returns the project to use for an operation. A per-project
+// controller only ever acts on its own project, whatever a CLI flag or queued
+// command file says. A global controller uses the project it is given.
 func (c *Controller) effectiveProject(project string) string {
-	if project == "" {
+	if c.project != "" {
 		return c.project
 	}
 	return project

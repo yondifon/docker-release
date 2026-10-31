@@ -130,7 +130,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 func (s *Server) listenAndServe(ctx context.Context, port int, mux http.Handler) error {
 	addr := fmt.Sprintf("%s:%d", s.cfg.BindAddr, port)
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 
 	go func() {
 		<-ctx.Done()
