@@ -1,4 +1,4 @@
-//go:build bundled_nginx || bundled_angie || bundled_caddy || bundled_haproxy
+//go:build bundled_nginx || bundled_angie || bundled_caddy || bundled_haproxy || bundled_traefik
 
 package main
 
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/malico/docker-release/internal/health"
+	"github.com/malico/docker-release/internal/provider"
 )
 
 type bundledProxy struct {
@@ -50,6 +51,9 @@ func bundledProxyFromEnv() (*bundledProxy, error) {
 				proxy.args = append(proxy.args, "-f", "/shared/haproxy-config/routes")
 			}
 		}
+		if v == "traefik" {
+			proxy.args = []string{"traefik", "--configFile=" + proxy.configPath}
+		}
 		return proxy, nil
 	default:
 		return nil, fmt.Errorf("unknown DR_BUNDLED_PROXY %q", os.Getenv("DR_BUNDLED_PROXY"))
@@ -77,9 +81,15 @@ func runWithBundledProxy(ctx context.Context, proxy *bundledProxy, run func(cont
 			return err
 		}
 	}
-	return superviseBundledProxy(ctx, proxy, run, health.IsReady, proxyResponding, func(context.Context) error {
-		return markBundledProxyStarted(proxy)
-	})
+	runProxy := func(ctx context.Context) error {
+		return superviseBundledProxy(ctx, proxy, run, health.IsReady, proxyResponding, func(context.Context) error {
+			return markBundledProxyStarted(proxy)
+		})
+	}
+	if proxy.name == "traefik" {
+		return runWithBundledRedirect(ctx, runProxy)
+	}
+	return runProxy(ctx)
 }
 
 func superviseBundledProxy(ctx context.Context, proxy *bundledProxy, run func(context.Context) error, configsReady func() bool, proxyReady func(context.Context) bool, started func(context.Context) error) (result error) {
@@ -211,7 +221,7 @@ func stopBundledProxy(cmd *exec.Cmd, done <-chan struct{}, name string) {
 	default:
 	}
 	sig := syscall.SIGQUIT
-	if name == "caddy" {
+	if name == "caddy" || name == "traefik" {
 		sig = syscall.SIGTERM
 	}
 	if name == "haproxy" {
@@ -259,7 +269,10 @@ func proxyResponding(ctx context.Context) bool {
 		return false
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	return bundledProxyName != "traefik" || provider.TraefikReady(ctx, "/shared/traefik-config")
 }
 
 func truthy(v string) bool {

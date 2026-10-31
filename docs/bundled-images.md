@@ -10,10 +10,9 @@ Run a proxy and docker-release in one Compose service. Add routing labels to you
 | Angie | `malico/docker-release-angie:<version>` |
 | Caddy | `malico/docker-release-caddy:<version>` |
 | HAProxy | `malico/docker-release-haproxy:<version>` |
+| Traefik | `malico/docker-release-traefik:<version>` |
 
 Use a release version in production. `latest` follows the newest release. Images support `linux/amd64` and `linux/arm64`.
-
-The Traefik bundle will use the same setup and image naming, but is not available yet.
 
 ## Add the service
 
@@ -53,7 +52,7 @@ No environment variables, `release.provider` label, proxy service name, or healt
 
 For later releases, install the [host command](../README.md#install-cli), then run `docker release app`. Keep a health check that proves each app can serve requests.
 
-Caddy and HAProxy app releases keep existing client connections open. Changes to hostnames, routes, or TLS settings can close idle connections; apply those changes during a maintenance window.
+Caddy, HAProxy, and Traefik app releases keep existing client connections open. Changes to hostnames, routes, or TLS settings can close idle connections; apply those changes during a maintenance window.
 
 ## Routing labels
 
@@ -66,15 +65,17 @@ Caddy and HAProxy app releases keep existing client connections open. Changes to
 | `release.tls.key` | empty | Path to the matching PEM private key; set both certificate and key |
 | `release.tls.redirect` | `false` | Set `"true"` to redirect HTTP to HTTPS with status 308 |
 | `release.strategy` | `linear` | Replace containers one at a time; also accepts `blue-green` and `canary` |
-| `release.affinity` | `ip` | Keep each client on one backend; use `cookie` for Angie, Caddy, or HAProxy sticky cookies or `""` to turn this off |
+| `release.affinity` | `ip` | Keep each client on one backend; use `cookie` for Angie, Caddy, HAProxy, or Traefik sticky cookies or `""` to turn this off |
 | `release.health_check_timeout` | `60s` | How long a replacement has to become healthy |
 | `release.drain_timeout` | `10s` | Time allowed for requests to finish before an old container stops |
 
 Give each app a different host. For several paths on one host, mount your own proxy config instead. Without a host, a path adds a route to the default HTTP server; `/health` is reserved. For example, `/app/orders` at path `/app/` reaches your app as `/orders`.
 
+Traefik uses sticky cookies for unweighted services even with `release.affinity: ip`; weighted groups use HRW. Its bundle uses only file-based routing, not `traefik.*` Docker labels. Other bundles keep their own affinity rules; see the provider guide before switching if your app relies on sticky sessions.
+
 ## Add TLS
 
-Nginx, Angie, and HAProxy do not obtain or renew certificates for you. Use your certificate tool, mount its output read-only, and publish port 443. This setup also works with Caddy:
+Nginx, Angie, HAProxy, and Traefik do not obtain or renew certificates for you. Use your certificate tool, mount its output read-only, and publish port 443. The same mounted-certificate setup works with all five bundles:
 
 ```yaml
 services:
@@ -114,8 +115,8 @@ Keep the default project detection. A bundle manages the apps in its own Compose
 
 Change only the image to another bundle in the table above and recreate that service. Keep the ports, mounts, health checks, and shared labels. For Caddy automatic HTTPS, also publish port 443. Recreating the proxy interrupts traffic; use app releases, not bundle replacement, for zero-downtime app updates.
 
-If apps explicitly set `release.provider`, remove that label or change it to the new proxy. Custom proxy config and provider-specific features are not portable; check the [Nginx](providers/nginx.md), [Angie](providers/angie.md), [Caddy](providers/caddy.md), or [HAProxy](providers/haproxy.md) page before switching.
+If apps explicitly set `release.provider`, remove that label or change it to the new proxy. Custom proxy config and provider-specific features are not portable; check the [Nginx](providers/nginx.md), [Angie](providers/angie.md), [Caddy](providers/caddy.md), [HAProxy](providers/haproxy.md), or [Traefik](providers/traefik.md) page before switching.
 
-Existing Nginx labels remain aliases: `release.nginx.host`, `release.nginx.path`, and `release.nginx.ssl.cert`, `.key`, and `.redirect`. The shared label wins when both names are set. These aliases also work in the Angie, Caddy, and HAProxy bundles.
+Existing Nginx labels remain aliases in all five bundles: `release.nginx.host`, `release.nginx.path`, and `release.nginx.ssl.cert`, `.key`, and `.redirect`. The shared label wins when both names are set.
 
 `DR_NGINX_SKIP_CONFIG` remains an alias for `DR_PROXY_SKIP_CONFIG` in the Nginx bundle. `DR_PROXY_SKIP_CONFIG` wins when both variables are set. Existing Nginx mounts and config paths still work.

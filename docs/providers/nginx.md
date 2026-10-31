@@ -60,11 +60,11 @@ volumes:
 
 ## Bundled Image
 
-Use `malico/docker-release-nginx` for Nginx and docker-release in one service. Follow [Bundled proxy images](../bundled-images.md) for the Compose setup, routing labels, TLS, defaults, and switching providers.
+Use `malico/docker-release-nginx:<version>` with the [shared bundle setup](../bundled-images.md). Keep the same app labels, ports, and state mount as the other four bundles. You do not need `release.provider`, an Nginx config file, or a shared config volume.
 
 ### Custom config
 
-Mount extra snippets read-only at these paths. The `proxy` paths work in both bundles; existing `nginx` paths are also supported.
+Mount extra snippets read-only at these paths. The `proxy` snippet paths work in the Nginx and Angie bundles; existing `nginx` paths are also supported in Nginx.
 
 | Path | Purpose |
 |---|---|
@@ -113,7 +113,7 @@ server {
 }
 ```
 
-## Required Labels
+## Required labels for a separate proxy
 
 ```yaml
 release.enable: "true"

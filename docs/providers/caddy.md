@@ -6,7 +6,7 @@ Choose the bundle for one service with routing labels, or keep Caddy separate an
 
 ## Bundled image
 
-Use `malico/docker-release-caddy:<version>` with the [shared bundle setup](../bundled-images.md). It uses the same app labels, ports, and state mount as the Nginx and Angie bundles. You do not need `release.provider`, a Caddyfile, or a shared config volume.
+Use `malico/docker-release-caddy:<version>` with the [shared bundle setup](../bundled-images.md). Keep the same app labels, ports, and state mount as the other four bundles. You do not need `release.provider`, a Caddyfile, or a shared config volume.
 
 HTTP works with the shared setup. To add automatic HTTPS, publish `443:443`, point your public hostname at the server, and allow inbound ports 80 and 443. Caddy obtains and renews certificates for `release.host`. HTTP remains available without a redirect. Mounted certificates and `release.tls.redirect` work as described in the shared setup.
 
@@ -105,7 +105,7 @@ example.com {
 
 For local testing, replace `example.com` with `:80`.
 
-## Required Labels
+## Required labels for a separate proxy
 
 ```yaml
 release.enable: "true"

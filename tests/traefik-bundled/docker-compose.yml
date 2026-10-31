@@ -1,0 +1,41 @@
+services:
+  docker-release:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: docker-release
+    build:
+      dockerfile: dockerfiles/traefik.Dockerfile
+    image: docker-release-traefik:local
+    ports: !override
+      - "8093:80"
+
+  linear_app:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: linear_app
+
+  canary_app:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: canary_app
+
+  blue_green_app:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: blue_green_app
+
+  path_app:
+    build:
+      context: ../bundled
+      dockerfile: app.Dockerfile
+    image: docker-release-test-app:local
+    environment:
+      WHOAMI_NAME: path
+    labels:
+      release.enable: "true"
+      release.path: /path/
+      release.health_check_timeout: 20s
+      release.drain_timeout: 5s
+
+volumes:
+  docker-release-state:
