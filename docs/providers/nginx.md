@@ -1,8 +1,50 @@
 # Nginx Provider
 
-Use this when you run Nginx and control its config.
+Use this when your app runs behind Nginx.
 
-`docker-release` writes upstream files and reloads Nginx after each deploy. With a separate Nginx service, you supply the `server` and `location` rules. The bundled image can generate those rules from labels.
+Start with the bundle: Nginx and `docker-release` in one service, with routes generated from app labels. Run Nginx yourself only when you already do, or need to control its whole config.
+
+## Bundled image
+
+Use `malico/docker-release-nginx:<version>`. The [quick start](../../README.md#quick-start) is a complete Compose file for it; the [shared bundle setup](../bundled-images.md) lists the labels. You do not need `release.provider`, an Nginx config file, or a shared config volume.
+
+### Custom config
+
+Mount extra snippets read-only at these paths. The `proxy` snippet paths work in the Nginx and Angie bundles; existing `nginx` paths are also supported in Nginx.
+
+| Path | Purpose |
+|---|---|
+| `/shared/nginx-config/*.conf` | generated upstreams, managed by `docker-release` |
+| `/shared/nginx-routes/*.server` | generated hostname routes |
+| `/shared/nginx-routes/*.location` | generated hostless path routes |
+| `/etc/docker-release/proxy/http.d/*.conf` | custom `http` context snippets |
+| `/etc/docker-release/proxy/conf.d/*.conf` | extra `server` blocks |
+| `/etc/docker-release/proxy/server.d/*.conf` | snippets inside generated HTTP/HTTPS servers |
+| `/etc/docker-release/proxy/ssl.d/*.conf` | snippets before routes in generated HTTPS servers |
+| `/etc/docker-release/proxy/https.d/*.conf` | snippets after routes in generated HTTPS servers |
+| `/etc/nginx/nginx.conf` | full config override; set `DR_PROXY_SKIP_CONFIG=true` |
+
+The container becomes healthy only after its initial config is ready and Nginx responds at `/health`. A full config override must keep `master_process` enabled and serve HTTP 200 at `http://127.0.0.1/health` without a redirect.
+
+With the bundled Nginx image, app responses carry `Connection: close` for a moment before each reload, so clients open a new connection instead of reusing one that Nginx is about to close. Clients that stay idle across a reload still have their connection closed, as with any Nginx reload.
+
+Nginx checks each config change before reloading. If it rejects a change, the previous files are restored and the deployment fails. Check the Nginx logs, labels, and mounted certificates before trying again.
+
+A release keeps old containers running until Nginx accepts the new config.
+
+Keep generated config directories writable and use the same directories for all services sharing this Nginx instance. The default config includes only the paths listed above; changing directory labels also needs a matching config override.
+
+The Nginx master and controller run as root to access the Docker socket and ports 80/443. Nginx workers run as `nginx`. Mounting the Docker socket grants control of the Docker host; use this image only for trusted services.
+
+Restarting the bundled service also restarts Nginx. App releases do not restart it.
+
+Clients must send HTTP headers and finish TLS setup within 10 seconds. This limit does not cap application response times.
+
+To check the bundle locally, run `make up-nginx-bundled`. In another terminal, run `python3 tests/bundled/check-reload.py nginx`, then `python3 tests/bundled/check-shutdown.py nginx`. The checks replace an app during a delayed reload and stop the bundle with an incomplete HTTP request. Run `make down-nginx-bundled` to remove the test stack and its volumes.
+
+## Separate Nginx service
+
+Run Nginx yourself when you need a config the bundle cannot take. `docker-release` writes upstream files to a shared volume and reloads Nginx; you write the `server` and `location` rules.
 
 ## What Gets Written
 
@@ -57,44 +99,6 @@ services:
 volumes:
   nginx-config:
 ```
-
-## Bundled Image
-
-Use `malico/docker-release-nginx:<version>` with the [shared bundle setup](../bundled-images.md). Keep the same app labels, ports, and state mount as the other four bundles. You do not need `release.provider`, an Nginx config file, or a shared config volume.
-
-### Custom config
-
-Mount extra snippets read-only at these paths. The `proxy` snippet paths work in the Nginx and Angie bundles; existing `nginx` paths are also supported in Nginx.
-
-| Path | Purpose |
-|---|---|
-| `/shared/nginx-config/*.conf` | generated upstreams, managed by `docker-release` |
-| `/shared/nginx-routes/*.server` | generated hostname routes |
-| `/shared/nginx-routes/*.location` | generated hostless path routes |
-| `/etc/docker-release/proxy/http.d/*.conf` | custom `http` context snippets |
-| `/etc/docker-release/proxy/conf.d/*.conf` | extra `server` blocks |
-| `/etc/docker-release/proxy/server.d/*.conf` | snippets inside generated HTTP/HTTPS servers |
-| `/etc/docker-release/proxy/ssl.d/*.conf` | snippets before routes in generated HTTPS servers |
-| `/etc/docker-release/proxy/https.d/*.conf` | snippets after routes in generated HTTPS servers |
-| `/etc/nginx/nginx.conf` | full config override; set `DR_PROXY_SKIP_CONFIG=true` |
-
-The container becomes healthy only after its initial config is ready and Nginx responds at `/health`. A full config override must keep `master_process` enabled and serve HTTP 200 at `http://127.0.0.1/health` without a redirect.
-
-With the bundled Nginx image, app responses carry `Connection: close` for a moment before each reload, so clients open a new connection instead of reusing one that Nginx is about to close. Clients that stay idle across a reload still have their connection closed, as with any Nginx reload.
-
-Nginx checks each config change before reloading. If it rejects a change, the previous files are restored and the deployment fails. Check the Nginx logs, labels, and mounted certificates before trying again.
-
-A release keeps old containers running until Nginx accepts the new config.
-
-Keep generated config directories writable and use the same directories for all services sharing this Nginx instance. The default config includes only the paths listed above; changing directory labels also needs a matching config override.
-
-The Nginx master and controller run as root to access the Docker socket and ports 80/443. Nginx workers run as `nginx`. Mounting the Docker socket grants control of the Docker host; use this image only for trusted services.
-
-Restarting the bundled service also restarts Nginx. App releases do not restart it.
-
-Clients must send HTTP headers and finish TLS setup within 10 seconds. This limit does not cap application response times.
-
-To check the bundle locally, run `make up-nginx-bundled`. In another terminal, run `python3 tests/bundled/check-reload.py nginx`, then `python3 tests/bundled/check-shutdown.py nginx`. The checks replace an app during a delayed reload and stop the bundle with an incomplete HTTP request. Run `make down-nginx-bundled` to remove the test stack and its volumes.
 
 ## Nginx Config
 

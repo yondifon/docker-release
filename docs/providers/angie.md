@@ -2,9 +2,52 @@
 
 Use this when your app runs behind Angie.
 
-With a separate Angie service, `docker-release` writes upstream files to a shared volume and reloads Angie after each deploy. You supply the `server` and `location` rules. The bundled image generates routes from app labels.
+Start with the bundle: Angie and `docker-release` in one service, with routes generated from app labels. Run Angie yourself only when you already do, or need to control its whole config.
 
 Angie is API-compatible with Nginx but adds native sticky cookie support, which makes it the right choice when you need `release.affinity: cookie`.
+
+## Bundled image
+
+Use `malico/docker-release-angie:<version>` in place of the image in the [quick start](../../README.md#quick-start). The [shared bundle setup](../bundled-images.md) lists the labels. You do not need `release.provider`, an Angie config file, or a shared config volume.
+
+Set `release.affinity: cookie` for native sticky cookies. The default remains `ip`. You can also use `release.angie.sticky.learn.name` to route by a cookie your app sets.
+
+### Custom config
+
+| Path | Purpose |
+|---|---|
+| `/shared/angie-config/*.conf` | generated upstreams; keep writable |
+| `/shared/angie-routes/*.server` | generated hostname routes; keep writable |
+| `/shared/angie-routes/*.location` | generated hostless path routes; keep writable |
+| `/etc/docker-release/proxy/http.d/*.conf` | custom `http` context snippets |
+| `/etc/docker-release/proxy/conf.d/*.conf` | extra `server` blocks |
+| `/etc/docker-release/proxy/server.d/*.conf` | snippets inside generated HTTP/HTTPS servers |
+| `/etc/docker-release/proxy/ssl.d/*.conf` | snippets before routes in generated HTTPS servers |
+| `/etc/docker-release/proxy/https.d/*.conf` | snippets after routes in generated HTTPS servers |
+| `/etc/angie/angie.conf` | full config override; set `DR_PROXY_SKIP_CONFIG=true` |
+
+Mount your custom files read-only. `/etc/docker-release/angie/` also accepts the snippet directories listed under `proxy/`. A full config override must keep `master_process` enabled and serve HTTP 200 at `http://127.0.0.1/health` without a redirect. Use the same generated directories for every app sharing this Angie instance.
+
+Angie checks config changes before applying them. If a change is rejected, the previous files are restored and the deployment fails. Check the Angie logs, labels, and mounted certificates before trying again. Old app containers stay available until Angie accepts the new config.
+
+The controller and Angie master run as root for the Docker socket and ports 80/443. Angie workers run as `angie`. Restarting this service restarts the proxy; app releases do not. Clients must finish HTTP headers and TLS setup within 10 seconds; application response times are not capped by this limit.
+
+### Check locally
+
+Run `make up-angie-bundled`, then run these commands in another terminal:
+
+```sh
+python3 tests/bundled/check-routing.py angie
+python3 tests/bundled/check-reload.py angie
+python3 tests/bundled/check-shutdown.py angie
+make down-angie-bundled
+```
+
+The checks cover all three app routes, an app release during a delayed reload, and shutdown with an incomplete HTTP request. The last command removes the test stack and its volumes.
+
+## Separate Angie service
+
+Run Angie yourself when you need a config the bundle cannot take. `docker-release` writes upstream files to a shared volume and reloads Angie; you write the `server` and `location` rules.
 
 ## What Gets Written
 
@@ -59,45 +102,6 @@ services:
 volumes:
   angie-config:
 ```
-
-## Bundled image
-
-Use `malico/docker-release-angie:<version>` with the [shared bundle setup](../bundled-images.md). Keep the same app labels, ports, and state mount as the other four bundles. You do not need `release.provider`, an Angie config file, or a shared config volume.
-
-Set `release.affinity: cookie` for native sticky cookies. The default remains `ip`. You can also use `release.angie.sticky.learn.name` to route by a cookie your app sets.
-
-### Custom config
-
-| Path | Purpose |
-|---|---|
-| `/shared/angie-config/*.conf` | generated upstreams; keep writable |
-| `/shared/angie-routes/*.server` | generated hostname routes; keep writable |
-| `/shared/angie-routes/*.location` | generated hostless path routes; keep writable |
-| `/etc/docker-release/proxy/http.d/*.conf` | custom `http` context snippets |
-| `/etc/docker-release/proxy/conf.d/*.conf` | extra `server` blocks |
-| `/etc/docker-release/proxy/server.d/*.conf` | snippets inside generated HTTP/HTTPS servers |
-| `/etc/docker-release/proxy/ssl.d/*.conf` | snippets before routes in generated HTTPS servers |
-| `/etc/docker-release/proxy/https.d/*.conf` | snippets after routes in generated HTTPS servers |
-| `/etc/angie/angie.conf` | full config override; set `DR_PROXY_SKIP_CONFIG=true` |
-
-Mount your custom files read-only. `/etc/docker-release/angie/` also accepts the snippet directories listed under `proxy/`. A full config override must keep `master_process` enabled and serve HTTP 200 at `http://127.0.0.1/health` without a redirect. Use the same generated directories for every app sharing this Angie instance.
-
-Angie checks config changes before applying them. If a change is rejected, the previous files are restored and the deployment fails. Check the Angie logs, labels, and mounted certificates before trying again. Old app containers stay available until Angie accepts the new config.
-
-The controller and Angie master run as root for the Docker socket and ports 80/443. Angie workers run as `angie`. Restarting this service restarts the proxy; app releases do not. Clients must finish HTTP headers and TLS setup within 10 seconds; application response times are not capped by this limit.
-
-### Check locally
-
-Run `make up-angie-bundled`, then run these commands in another terminal:
-
-```sh
-python3 tests/bundled/check-routing.py angie
-python3 tests/bundled/check-reload.py angie
-python3 tests/bundled/check-shutdown.py angie
-make down-angie-bundled
-```
-
-The checks cover all three app routes, an app release during a delayed reload, and shutdown with an incomplete HTTP request. The last command removes the test stack and its volumes.
 
 ## Angie Config
 

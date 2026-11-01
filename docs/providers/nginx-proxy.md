@@ -1,6 +1,6 @@
 # nginx-proxy Provider
 
-Use this when your stack uses `nginxproxy/nginx-proxy`.
+Use this when your stack already uses `nginxproxy/nginx-proxy`, or for [global mode](../global.md). For a new setup, start with the [Nginx bundle](../../README.md#quick-start) instead.
 
 `docker-release` writes a managed `nginx.tmpl` file to a shared volume. nginx-proxy reads that template and generates its Nginx config from it. Your `VIRTUAL_HOST`, `VIRTUAL_PATH`, and other routing env vars work exactly as before — `docker-release` only controls which container IPs are live in the upstream.
 
