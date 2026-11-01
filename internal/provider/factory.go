@@ -82,6 +82,7 @@ func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 			return NewHAProxyRoutes(cfg.HAProxyConfigDir, HAProxyRoute{
 				Host:        cfg.RouteHost,
 				PreviewHost: cfg.PreviewHost,
+				PreviewLink: cfg.PreviewToken != "",
 				Path:        cfg.RoutePath,
 				TLSCert:     cfg.TLSCert,
 				TLSKey:      cfg.TLSKey,

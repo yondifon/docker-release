@@ -372,3 +372,64 @@ func TestHAProxyRuntimeUpdateSeesBothBackends(t *testing.T) {
 		t.Errorf("got %v", seen)
 	}
 }
+
+func generateHAProxyPreview(t *testing.T, route HAProxyRoute, state *UpstreamState) (frontend, backend, routeFile string) {
+	t.Helper()
+	p := bundledHAProxy(t, t.TempDir(), route)
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	frontend, backend = settle(t, p)
+	return frontend, backend, string(p.pending[filepath.Join(p.configDir, "app.route")])
+}
+
+func TestHAProxyBundledPreviewLinkIsOffWithoutTheLabel(t *testing.T) {
+	route := HAProxyRoute{Host: "app.example.com", PreviewHost: "next.example.com", Path: "/api", Affinity: "ip"}
+	state := UpstreamState{Service: "app", Servers: []Server{{Addr: "10.0.0.1:80"}}, Preview: []Server{{Addr: "10.0.0.2:80"}}}
+	frontend, backend, file := generateHAProxyPreview(t, route, &state)
+
+	state.PreviewToken = "abcdefghijklmnop1234"
+	withToken, backendWithToken, fileWithToken := generateHAProxyPreview(t, route, &state)
+	if withToken != frontend || backendWithToken != backend || fileWithToken != file {
+		t.Errorf("a token must change nothing while the route has no preview link:\n%s\n%s", withToken, backendWithToken)
+	}
+}
+
+func TestHAProxyBundledPreviewTokenIsInTheConfigOnlyWhileLive(t *testing.T) {
+	const token = "abcdefghijklmnop1234"
+	route := HAProxyRoute{Host: "app.example.com", PreviewHost: "next.example.com", Path: "/api", PreviewLink: true, Affinity: "ip"}
+	state := UpstreamState{Service: "app", Servers: []Server{{Addr: "10.0.0.1:80"}}, Preview: []Server{{Addr: "10.0.0.2:80"}}, PreviewToken: token}
+
+	frontend, backend, file := generateHAProxyPreview(t, route, &state)
+	if !strings.Contains(frontend, token) || !strings.Contains(file, token) || strings.Contains(backend, token) {
+		t.Errorf("the token belongs in the frontend and the route file only:\n%s\n%s\n%s", frontend, backend, file)
+	}
+	// The link serves a path-prefixed route, so its backend must strip the prefix;
+	// the preview host serves `/`, so its backend must not.
+	link := backend[strings.Index(backend, "backend app_preview_link_be"):]
+	preview := backend[strings.Index(backend, "backend app_preview_be"):strings.Index(backend, "backend app_preview_link_be")]
+	if !strings.Contains(link, "replace-path") || strings.Contains(preview, "replace-path") {
+		t.Errorf("wrong path rewrite:\n%s", backend)
+	}
+
+	// Without a preview host the link still needs a backend of its own.
+	route.PreviewHost, route.Path = "", ""
+	_, backend, _ = generateHAProxyPreview(t, route, &state)
+	if !strings.Contains(backend, "backend app_preview_be") {
+		t.Errorf("want a preview backend for the link:\n%s", backend)
+	}
+
+	state.PreviewToken, state.Preview = "", nil
+	route.PreviewHost, route.Path = "next.example.com", "/api"
+	frontend, backend, file = generateHAProxyPreview(t, route, &state)
+	for _, got := range []string{frontend, backend, file} {
+		if strings.Contains(got, token) || strings.Contains(got, "preview") {
+			t.Errorf("nothing about the preview may stay once it ends:\n%s", got)
+		}
+	}
+	// A link sent after the release still has the token in its URL, so the access
+	// log must never print the query string while the label is set.
+	if strings.Contains(frontend, "%{+Q}r") {
+		t.Errorf("the access log prints the full request line:\n%s", frontend)
+	}
+}
