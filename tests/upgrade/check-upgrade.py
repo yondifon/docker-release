@@ -65,6 +65,8 @@ class Stack:
         command = ["env", f"PWD={HERE}", "docker", "compose"]
         if self.mode == "host-options":
             command += ["--env-file", str(HOST_TMP / "explicit.env")]
+            if args[0] == "up":
+                command += ["--profile", "production"]
         for file in self.files:
             command += ["-f", file]
         return run(*command, *args, **kwargs)
@@ -88,7 +90,7 @@ class Stack:
         if self.host:
             # An unrelated cwd makes `-f` and Compose's saved paths necessary.
             environment = os.environ.copy()
-            for key in ("COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_ENV_FILES",
+            for key in ("COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_ENV_FILES", "COMPOSE_PROFILES",
                         "FROM_COMPOSE", "TAG", "OVERLAY_VALUE"):
                 environment.pop(key, None)
             environment["PWD"] = str(HOST_TMP)
