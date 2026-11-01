@@ -280,7 +280,7 @@ docker ps \
 - **`scripts/docker-release` is the only host command.** There is no `dr` standalone binary for the host. On the host: `docker release`. Inside the container: `dr`.
 - **Do not add subcommands to the binary without updating the reserved-word list** in `main.go`'s `default:` branch comment and `printUsage()`.
 - **Provider config is written to a shared volume, never to the proxy container's filesystem directly.** The proxy mounts the volume read-only.
-- **State is persisted to `/var/lib/docker-release`.** Mount a Docker volume there in production to survive container restarts.
+- **State is persisted to `/var/lib/docker-release`.** Images declare it as a volume, so it survives restarts and recreates; mount a named volume there to keep it through `docker compose down`.
 - **Test stacks live in `tests/`.** Each provider has its own compose stack. `tests/app.Dockerfile` builds the shared dummy app used across all test stacks.
 - **Run `go test ./...` after any Go change.** All packages have tests; keep them green.
 - **`entrypoint.sh` in the repo root is dead code** — the Dockerfile does not use it. Do not reference or restore it without first understanding why it was bypassed.
