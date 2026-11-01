@@ -316,9 +316,17 @@ def rejected_host_config(stack):
     contents = env_file.read_text()
     try:
         env_file.write_text('FROM_COMPOSE="unterminated\n')
-        result = stack.release()
+        traffic = Traffic()
+        traffic.start()
+        try:
+            result = stack.release()
+        finally:
+            traffic.finish()
         require(result.returncode != 0,
                 f"host release accepted malformed env file:\n{result.stdout}{result.stderr}")
+        require(traffic.ok > 0, "no request reached the app while rejecting invalid config")
+        require(not traffic.failures,
+                f"requests failed while rejecting invalid config: {traffic.failures[:3]}")
         require(app_containers(running_only=False) == before,
                 "invalid host config replaced the old app or left an extra container")
         current = inspect(before[0])
@@ -367,10 +375,11 @@ def prepare(mode):
 def cleanup():
     for file in ("explicit.env", "app values.env", "host $ files/marker"):
         (HOST_TMP / file).unlink(missing_ok=True)
-    if (HOST_TMP / "host $ files").exists():
-        (HOST_TMP / "host $ files").rmdir()
-    if HOST_TMP.exists():
-        HOST_TMP.rmdir()
+    for directory in (HOST_TMP / "host $ files", HOST_TMP):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
     (HERE / ".env").unlink(missing_ok=True)
     (HERE / "bind" / "marker").unlink(missing_ok=True)
     try:
