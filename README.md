@@ -48,11 +48,13 @@ docker compose up -d
 docker release app
 ```
 
-Open `http://app.localhost/`. Browsers send `*.localhost` to your own machine. On a server, set `release.host` to your domain and point its DNS at the server.
+Without the CLI, run `docker compose exec docker-release dr release app`.
+
+Open `http://app.localhost/`. Browsers send `*.localhost` to your own machine. If port 80 is taken, change the first number in `"80:80"` and use that port in the address. On a server, set `release.host` to your domain and point its DNS at the server.
 
 - Your app needs a Docker health check. A new container gets traffic only after it is healthy.
 - Requests go to your app's lowest exposed port, or port 80 if it exposes none. Do not publish the app's ports.
-- Keep the project mount. [Why it is there](docs/bundled-images.md#project-mount).
+- Keep the project mount, the third volume. [What it does](docs/bundled-images.md#project-mount).
 - The state volume keeps rollback history when you recreate the service.
 - In production, pin a version such as `:0.2.0` instead of `latest`.
 
@@ -64,10 +66,10 @@ Every bundle uses the same Compose service and labels. To change proxy, change t
 
 | Image | Good for |
 |---|---|
-| `malico/docker-release-nginx` | The default. Familiar, widely used Nginx |
+| `malico/docker-release-nginx` | The usual choice. Plain Nginx |
 | `malico/docker-release-caddy` | Automatic HTTPS with free certificates |
-| `malico/docker-release-traefik` | Releases with no proxy reload |
-| `malico/docker-release-haproxy` | Releases with no proxy reload, sticky cookies |
+| `malico/docker-release-traefik` | No proxy reload on release |
+| `malico/docker-release-haproxy` | No proxy reload on release; sticky cookies |
 | `malico/docker-release-angie` | Nginx-compatible, with sticky cookies |
 
 Per-proxy details are in the [provider guides](docs/readme.md#provider-guides).
