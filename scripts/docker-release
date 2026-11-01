@@ -8,6 +8,8 @@
 #
 # Usage: docker release [-f <compose-file>] <service>
 
+set -f
+
 if [ "$1" = "docker-cli-plugin-metadata" ]; then
   printf '{"SchemaVersion":"0.1.0","Vendor":"docker-release","ShortDescription":"Deployment controller for Docker Compose"}\n'
   exit 0
@@ -45,16 +47,212 @@ _dr_project() {
   basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/^-*//;s/-*$//'
 }
 
-project=$(_dr_project)
-cid=$(docker ps \
-  --filter "label=com.docker.compose.project=${project}" \
-  --filter "label=org.opencontainers.image.title=docker-release" \
-  --format "{{.ID}}" | head -1)
+_dr_controller() {
+  docker ps \
+    --filter "label=com.docker.compose.project=${project}" \
+    --filter "label=org.opencontainers.image.title=docker-release" \
+    --format "{{.ID}}" | head -1
+}
+
+_dr_compose_config() {
+  config_service=$1
+  set -- compose
+  [ -z "$compose_project_override" ] || set -- "$@" -p "$compose_project_override"
+  [ -z "$compose_workdir" ] || set -- "$@" --project-directory "$compose_workdir"
+  old_ifs=$IFS
+  IFS=,
+  for file in $compose_files; do
+    set -- "$@" -f "$file"
+  done
+  for file in $compose_env_files; do
+    set -- "$@" --env-file "$file"
+  done
+  IFS=$old_ifs
+  set -- "$@" config --format json
+  [ -z "$config_service" ] || set -- "$@" "$config_service"
+  docker "$@"
+}
+
+_dr_model_project() {
+  printf '%s\n' "$model" | sed -n 's/^  "name": "\([a-z0-9_-]*\)",*$/\1/p'
+}
+
+_dr_inspect() {
+  docker inspect --format '{{- $global := false -}}
+{{- range .Config.Env -}}
+{{- if or (eq . "DR_ALL_PROJECTS=true") (eq . "DR_ALL_PROJECTS=1") -}}{{- $global = true -}}{{- end -}}
+{{- end -}}
+{{- index .Config.Labels "com.docker.compose.project" -}}{{- "\n" -}}{{- $global -}}{{- "\n" -}}
+{{- $prefix := "com.docker.compose.project." -}}
+{{- if index .Config.Labels "io.docker-release.compose.config_files" -}}{{- $prefix = "io.docker-release.compose." -}}{{- end -}}
+{{- index .Config.Labels (printf "%sworking_dir" $prefix) -}}{{- "\n" -}}
+{{- index .Config.Labels (printf "%sconfig_files" $prefix) -}}{{- "\n" -}}
+{{- index .Config.Labels (printf "%senvironment_file" $prefix) -}}' "$1"
+}
+
+_dr_find_selected_controller() {
+  [ -n "$selected_file" ] || return 0
+  controllers=$(docker ps --filter "label=org.opencontainers.image.title=docker-release" --format '{{.ID}}') || return 1
+  for candidate in $controllers; do
+    record=$(_dr_inspect "$candidate") || return 1
+    candidate_files=$(printf '%s\n' "$record" | sed -n '4p')
+    case ",$candidate_files," in *",$selected_file,"*) ;; *) continue ;; esac
+    candidate_project=$(printf '%s\n' "$record" | sed -n '1p')
+    candidate_global=$(printf '%s\n' "$record" | sed -n '2p')
+    wanted_project=${explicit_project:-$COMPOSE_PROJECT_NAME}
+    [ "$candidate_global" != true ] || wanted_project=$COMPOSE_PROJECT_NAME
+    [ -z "$wanted_project" ] || [ "$wanted_project" = "$candidate_project" ] || continue
+    if [ -n "$cid" ]; then
+      echo "error: more than one controller uses these Compose files; select one with --project or COMPOSE_PROJECT_NAME" >&2
+      return 1
+    fi
+    cid=$candidate
+    project=$candidate_project
+    controller_global=$candidate_global
+  done
+}
+
+_dr_compose_selection() {
+  compose_environment=$(printf 'services: {}\n' | docker compose --project-directory "$PWD" -f - config --environment --no-consistency) || return 1
+  while IFS= read -r entry; do
+    case "$entry" in
+      COMPOSE_FILE=*) COMPOSE_FILE=${entry#*=} ;;
+      COMPOSE_PATH_SEPARATOR=*) COMPOSE_PATH_SEPARATOR=${entry#*=} ;;
+    esac
+  done <<EOF
+$compose_environment
+EOF
+  unset compose_environment entry
+}
+
+sync_release=true
+case "$1" in
+  ""|watch|rollback|status|healthcheck|version|help|-*) sync_release=false ;;
+esac
+explicit_project=""
+project_value=false
+for arg in "$@"; do
+  if [ "$project_value" = true ]; then
+    explicit_project=$arg
+    project_value=false
+    continue
+  fi
+  case "$arg" in
+    --project|-p) project_value=true ;;
+    --detach|-d|--help|-h) sync_release=false ;;
+  esac
+done
+
+if [ "$sync_release" = true ]; then
+  service=$1
+  [ "$service" != release ] || service=$2
+  compose_files=""
+  compose_workdir=""
+  compose_env_files=""
+  compose_project_override=""
+  controller_global=""
+  cid=""
+  if [ -z "$compose_file" ] && [ -z "$COMPOSE_FILE" ]; then
+    _dr_compose_selection || exit 1
+  fi
+  if [ -n "$compose_file" ]; then
+    compose_workdir=$(CDPATH= cd -- "$(dirname "$compose_file")" && pwd) || exit 1
+    compose_files="$compose_workdir/$(basename "$compose_file")"
+  elif [ -n "$COMPOSE_FILE" ]; then
+    old_ifs=$IFS
+    IFS=${COMPOSE_PATH_SEPARATOR:-:}
+    for file in $COMPOSE_FILE; do
+      dir=$(CDPATH= cd -- "$(dirname "$file")" && pwd) || exit 1
+      [ -n "$compose_workdir" ] || compose_workdir=$dir
+      compose_files="${compose_files:+$compose_files,}$dir/$(basename "$file")"
+    done
+    IFS=$old_ifs
+  else
+    dir=$PWD
+    while [ -n "$dir" ]; do
+      for file in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+        [ -f "$dir/$file" ] || continue
+        compose_files="$dir/$file"
+        break
+      done
+      [ -z "$compose_files" ] || break
+      [ "$dir" != / ] || break
+      dir=$(dirname "$dir")
+    done
+  fi
+  selected_file=${compose_files%%,*}
+  _dr_find_selected_controller || exit 1
+  if [ -z "$cid" ]; then
+    model=$(_dr_compose_config) || exit 1
+    project=$(_dr_model_project)
+    if [ -z "$project" ]; then
+      echo "error: cannot determine project from docker compose config" >&2
+      exit 1
+    fi
+    cid=$(_dr_controller)
+    if [ -n "$cid" ]; then
+      record=$(_dr_inspect "$cid") || exit 1
+      controller_global=$(printf '%s\n' "$record" | sed -n '2p')
+    fi
+  fi
+  if [ "$controller_global" = true ]; then
+    sync_release=false
+  elif [ -n "$explicit_project" ]; then
+    if [ "$explicit_project" != "$project" ]; then
+      echo "error: controller does not manage project '$explicit_project'; select its Compose files" >&2
+      exit 1
+    fi
+    compose_project_override=$explicit_project
+  fi
+else
+  project=$(_dr_project)
+  cid=$(_dr_controller)
+fi
 
 if [ -z "$cid" ]; then
   echo "error: docker-release controller not running in project '${project}'" >&2
   echo "       start with: docker compose up -d" >&2
   exit 1
+fi
+
+if [ "$sync_release" = true ]; then
+  source_cid=$(docker ps \
+    --filter "label=com.docker.compose.project=${project}" \
+    --filter "label=com.docker.compose.service=${service}" \
+    --format "{{.ID}}" | head -1)
+  source_cid=${source_cid:-$cid}
+  record=$(_dr_inspect "$source_cid") || exit 1
+  source=$(printf '%s\n' "$record" | sed '1,2d')
+  saved_files=$(printf '%s\n' "$source" | sed -n '2p')
+  if [ -n "$compose_file" ]; then
+    # The base file still needs the overlays used to start this stack.
+    case "$saved_files" in
+      "$compose_files"|"$compose_files",*)
+        compose_files=$saved_files
+        compose_workdir=$(printf '%s\n' "$source" | sed -n '1p')
+        ;;
+    esac
+  fi
+  if [ -z "$compose_file" ] && [ -z "$COMPOSE_FILE" ]; then
+    compose_workdir=$(printf '%s\n' "$source" | sed -n '1p')
+    compose_files=$saved_files
+    case "$compose_files" in "<no value>"|-) compose_files="" ;; esac
+    [ "$compose_workdir" != "<no value>" ] || compose_workdir=""
+  fi
+  compose_env_files=$(printf '%s\n' "$source" | sed -n '3p')
+  [ "$compose_env_files" != "<no value>" ] || compose_env_files=""
+  model=$(_dr_compose_config "$service") || exit 1
+  if [ "$(_dr_model_project)" != "$project" ]; then
+    echo "error: Compose project does not match the controller; pass --project $project or select the correct Compose files" >&2
+    exit 1
+  fi
+  printf '%s\n' "$model" | docker exec -i \
+    -e DR_COMPOSE_CONFIG_STDIN=1 \
+    -e "DR_COMPOSE_CONFIG_WORKING_DIR=$compose_workdir" \
+    -e "DR_COMPOSE_CONFIG_FILES=$compose_files" \
+    -e "DR_COMPOSE_CONFIG_ENV_FILES=$compose_env_files" \
+    "$cid" dr "$@"
+  exit $?
 fi
 
 exec docker exec "$cid" dr "$@"

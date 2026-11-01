@@ -28,7 +28,7 @@ services:
       - "8094:80"
 
   app:
-    image: upgrade-app:${TAG:-latest}
+    image: upgrade-app:${TAG:?TAG must be set by check-upgrade.py}
     environment:
       FROM_COMPOSE: ${FROM_COMPOSE:-one}
       SHARED_KEY: compose

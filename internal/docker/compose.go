@@ -24,6 +24,7 @@ type ComposeProject struct {
 	WorkingDir  string
 	ConfigFiles []string
 	EnvFiles    []string
+	Config      []byte
 }
 
 // ComposeProjectOf reads the project from container labels. It reports false
@@ -34,6 +35,11 @@ func ComposeProjectOf(labels map[string]string) (ComposeProject, bool) {
 		WorkingDir:  labels[composeWorkingDirLabel],
 		ConfigFiles: splitList(labels[composeConfigFilesLabel]),
 		EnvFiles:    splitList(labels[composeEnvFileLabel]),
+	}
+	if files := labels[composeSourceFilesLabel]; files != "" {
+		p.WorkingDir = labels[composeSourceDirLabel]
+		p.ConfigFiles = splitList(files)
+		p.EnvFiles = splitList(labels[composeSourceEnvLabel])
 	}
 	return p, p.Name != "" && p.WorkingDir != "" && len(p.ConfigFiles) > 0
 }
@@ -86,17 +92,28 @@ func (c *Client) ScaleService(ctx context.Context, p ComposeProject, service str
 	}
 
 	args := append(base[1:], "-p", p.Name, "--project-directory", p.WorkingDir)
-	for _, file := range p.ConfigFiles {
-		args = append(args, "-f", file)
+	if len(p.Config) > 0 {
+		args = append(args, "-f", "-", "--env-file", "/dev/null")
+	} else {
+		for _, file := range p.ConfigFiles {
+			args = append(args, "-f", file)
+		}
+		for _, file := range p.EnvFiles {
+			args = append(args, "--env-file", file)
+		}
 	}
-	for _, file := range p.EnvFiles {
-		args = append(args, "--env-file", file)
+	args = append(args, "up", "-d", "--no-deps", "--no-recreate")
+	if len(p.Config) > 0 {
+		args = append(args, "--no-build")
 	}
-	args = append(args, "up", "-d", "--no-deps", "--no-recreate",
-		"--scale", service+"="+strconv.Itoa(replicas), service)
+	args = append(args, "--scale", service+"="+strconv.Itoa(replicas), service)
 
 	cmd := exec.CommandContext(ctx, base[0], args...)
-	cmd.Dir = p.WorkingDir
+	if len(p.Config) > 0 {
+		cmd.Stdin = bytes.NewReader(p.Config)
+	} else {
+		cmd.Dir = p.WorkingDir
+	}
 	// PWD is the project directory, as it is in the shell that ran the first
 	// `docker compose up`, so a `${PWD}` in the compose file means the same here.
 	cmd.Env = append(os.Environ(), "COMPOSE_IGNORE_ORPHANS=true", "PWD="+p.WorkingDir)
