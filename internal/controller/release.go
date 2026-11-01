@@ -72,6 +72,16 @@ func (c *Controller) processReleaseCommands(ctx context.Context) {
 	}
 }
 
+// ReleaseFailure returns an error with the stored reason when the service's
+// last release was undone because a check failed, and nil otherwise.
+func (c *Controller) ReleaseFailure(project, service string) error {
+	ds, err := c.managerFor(c.effectiveProject(project)).Load(service)
+	if err != nil || ds.Failure == "" {
+		return nil
+	}
+	return fmt.Errorf("release undone. %s\nThe old version is still serving", ds.Failure)
+}
+
 // Release triggers a deployment for the given project and service. project is
 // required in global mode (c.project == "") so the correct state manager and
 // container filter are used.

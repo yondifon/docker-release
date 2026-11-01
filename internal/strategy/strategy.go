@@ -26,6 +26,11 @@ type Deployment struct {
 	// deployment's ID, captured before this one overwrote the state file.
 	DeployID     string
 	PrevDeployID string
+
+	// Checks runs `release.check.command`; set when the command is configured.
+	Checks CheckRunner
+	// Requests delivers the proxy's requests; set when error rules are configured.
+	Requests RequestSource
 }
 
 // resolveDeployID returns the controller-supplied ID, generating one only when

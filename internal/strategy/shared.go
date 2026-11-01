@@ -39,6 +39,12 @@ func removeContainers(ctx context.Context, tag string, docker DockerOps, contain
 // containers, tear down the new ones, and persist an idle state. tag doubles as
 // the strategy name written to state, matching the values strategies save.
 func baseRollback(ctx context.Context, tag string, docker DockerOps, prov provider.Provider, stateMgr *state.Manager, d *Deployment) error {
+	return rollbackWithFailure(ctx, tag, docker, prov, stateMgr, d, "")
+}
+
+// rollbackWithFailure is baseRollback that also stores why the release was
+// undone, so `dr status` can show it.
+func rollbackWithFailure(ctx context.Context, tag string, docker DockerOps, prov provider.Provider, stateMgr *state.Manager, d *Deployment, failure string) error {
 	slog.Info("rolling back", "component", tag, "service", d.Service)
 
 	upstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName()}
@@ -62,6 +68,7 @@ func baseRollback(ctx context.Context, tag string, docker DockerOps, prov provid
 		Status:     state.StatusIdle,
 		Strategy:   tag,
 		Containers: state.Containers{Stable: containerIDs(d.Old)},
+		Failure:    failure,
 	}
 	if err := stateMgr.Save(ds); err != nil {
 		return fmt.Errorf("saving rollback state: %w", err)
@@ -69,6 +76,16 @@ func baseRollback(ctx context.Context, tag string, docker DockerOps, prov provid
 
 	slog.Info("rollback complete", "component", tag, "service", d.Service)
 	return nil
+}
+
+// newOnlyUpstream is the config that sends everything to the new containers.
+func newOnlyUpstream(d *Deployment, affinity string) *provider.UpstreamState {
+	upstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName(), Affinity: affinity}
+	for _, c := range d.New {
+		upstream.Servers = append(upstream.Servers, provider.Server{Addr: c.Addr})
+	}
+	ApplyProviderSettings(d.Config, upstream)
+	return upstream
 }
 
 // promoteAndDrain routes traffic to the new containers (with old as backup),
@@ -103,11 +120,7 @@ func promoteAndDrain(ctx context.Context, tag string, docker DockerOps, prov pro
 		return ctx.Err()
 	}
 
-	stableUpstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName()}
-	for _, c := range d.New {
-		stableUpstream.Servers = append(stableUpstream.Servers, provider.Server{Addr: c.Addr})
-	}
-	ApplyProviderSettings(d.Config, stableUpstream)
+	stableUpstream := newOnlyUpstream(d, "")
 
 	if err := prov.GenerateConfig(ctx, stableUpstream); err != nil {
 		return fmt.Errorf("generating stable config: %w", err)
