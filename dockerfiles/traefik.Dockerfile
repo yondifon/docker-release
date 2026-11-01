@@ -13,7 +13,8 @@ FROM docker/compose-bin:${COMPOSE_VERSION} AS compose
 
 FROM traefik:v3.6 AS runtime
 RUN apk add --no-cache ca-certificates tini \
-  && mkdir -p /etc/traefik /shared/traefik-config
+  && mkdir -p /etc/traefik /shared/traefik-config /var/lib/docker-release
+VOLUME /var/lib/docker-release
 COPY --from=builder /bin/dr /usr/local/bin/dr
 COPY --from=compose /docker-compose /usr/local/bin/docker-compose
 COPY packaging/traefik/health.yml /shared/traefik-config/health.yml

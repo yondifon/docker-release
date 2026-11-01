@@ -14,7 +14,9 @@ FROM docker/compose-bin:${COMPOSE_VERSION} AS compose
 FROM haproxy:3.2-alpine AS runtime
 USER root
 RUN apk add --no-cache ca-certificates tini \
-  && mkdir -p /run/haproxy /shared/haproxy-config/routes
+  && mkdir -p /run/haproxy /shared/haproxy-config/routes \
+    /var/lib/docker-release
+VOLUME /var/lib/docker-release
 
 COPY --from=builder /bin/dr /usr/local/bin/dr
 COPY --from=compose /docker-compose /usr/local/bin/docker-compose

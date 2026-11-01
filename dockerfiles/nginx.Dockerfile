@@ -17,7 +17,8 @@ RUN apk add --no-cache ca-certificates nginx tini \
   && mkdir -p /run/nginx /shared/nginx-config /shared/nginx-routes \
     /etc/docker-release/nginx/conf.d /etc/docker-release/nginx/http.d \
     /etc/docker-release/nginx/server.d /etc/docker-release/nginx/ssl.d \
-    /etc/docker-release/nginx/https.d
+    /etc/docker-release/nginx/https.d /var/lib/docker-release
+VOLUME /var/lib/docker-release
 
 COPY --from=builder /bin/dr /usr/local/bin/dr
 COPY --from=compose /docker-compose /usr/local/bin/docker-compose
