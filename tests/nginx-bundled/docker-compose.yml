@@ -19,5 +19,15 @@ services:
       file: ../bundled/docker-compose.yml
       service: blue_green_app
 
+  path_app:
+    extends:
+      file: ../bundled/docker-compose.yml
+      service: linear_app
+    environment:
+      WHOAMI_NAME: path
+    labels:
+      release.host: ""
+      release.path: /path/
+
 volumes:
   docker-release-state:

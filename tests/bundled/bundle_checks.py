@@ -7,6 +7,7 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.parse
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -22,9 +23,9 @@ class Route:
 
 
 ROUTES = [
-    Route("linear_app", "linear.localhost", "/linear/", "linear"),
-    Route("canary_app", "canary.localhost", "/canary/", "canary"),
-    Route("blue_green_app", "bluegreen.localhost", "/bluegreen/", "blue_green"),
+    Route("linear_app", "linear.localhost", "/", "linear"),
+    Route("canary_app", "canary.localhost", "/", "canary"),
+    Route("blue_green_app", "bluegreen.localhost", "/", "blue_green"),
 ]
 
 
@@ -42,8 +43,7 @@ class Bundle:
         self.context = context
         self.tls_port = tls_port
         self.routes = list(ROUTES)
-        if proxy in ["caddy", "haproxy", "traefik"]:
-            self.routes.append(Route("path_app", "localhost", "/path/", "path"))
+        self.routes.append(Route("path_app", "localhost", "/path/", "path"))
         self.compose = ["docker", "compose", "-f", f"tests/{proxy}-bundled/docker-compose.yml"]
         self.controller = f"{proxy}-bundled-docker-release-1"
 
@@ -103,18 +103,35 @@ def check_routing(bundle, tls_routes=None, redirect=False):
         for route in tls_routes:
             for suffix in ["", "probe?bundle=tls-check"]:
                 bundle.check_response(route, suffix, True).close()
-    negatives = [(bundle.routes[0], "/linear/", "unknown.localhost")]
-    negatives += [(route, "/not-a-route/", route.host) for route in bundle.routes]
+    # A route without a path prefix answers every path on its host.
+    prefixed = [route for route in bundle.routes if route.prefix != "/"]
+    negatives = [(bundle.routes[0], "/", "unknown.localhost")]
+    negatives += [(route, "/not-a-route/", route.host) for route in prefixed]
     for route, path, host in negatives:
         connection, status, body, _ = bundle.exchange(route, path, host=host)
         connection.close()
         assert status == 404 and b"Name: " not in body, ("unknown route reached an app", host, path, status, body)
     if bundle.context:
-        for route in tls_routes:
+        for route in [route for route in tls_routes if route.prefix != "/"]:
             connection, status, body, _ = bundle.exchange(route, "/not-a-route/", True)
             connection.close()
             assert status == 404 and b"Name: " not in body, ("unknown TLS path reached an app", route.host, status, body)
+    if bundle.proxy in ["nginx", "angie"]:
+        check_redirect_keeps_port(bundle)
     print(f"PASS: {bundle.proxy} app bodies, stripped paths, unknown hosts, and unknown paths", flush=True)
+
+
+def check_redirect_keeps_port(bundle):
+    # A browser that opened `localhost:<port>/path` must land on `localhost:<port>/path/`.
+    port = PORTS[bundle.proxy]
+    route = next(route for route in bundle.routes if route.prefix != "/")
+    address = f"{route.host}:{port}"
+    connection, status, _, headers = bundle.exchange(route, route.prefix.rstrip("/"), host=address)
+    connection.close()
+    assert status == 301, (route.service, status)
+    location = urllib.parse.urlsplit(headers["Location"])
+    assert location.path == route.prefix and location.netloc in ["", address], headers["Location"]
+    print(f"PASS: {bundle.proxy} trailing-slash redirect keeps the address the client used", flush=True)
 
 
 def check_releases(bundle):
