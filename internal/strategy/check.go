@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,9 +25,10 @@ type CheckRunner interface {
 	RunCheck(ctx context.Context, target ContainerInfo) (CheckResult, error)
 }
 
-// RequestSource delivers every request the proxy answers, until cancel is called.
+// RequestSource delivers every request the proxy answers, until cancel is
+// called. lost closes if the stream breaks before that.
 type RequestSource interface {
-	Subscribe(fn func(accesslog.Entry)) (cancel func())
+	Subscribe(fn func(accesslog.Entry)) (cancel func(), lost <-chan struct{}, err error)
 }
 
 // UndoneError means the release failed a check and was undone: the old
@@ -61,7 +63,7 @@ func runChecks(ctx context.Context, d *Deployment) (reason string, err error) {
 		case ctx.Err() != nil:
 			return "", ctx.Err()
 		case errors.Is(runErr, context.DeadlineExceeded):
-			return withOutput(fmt.Sprintf("Check timed out after %s on new container %s.", check.Timeout, short), result.Output), nil
+			return withOutput(fmt.Sprintf("Check timed out after %s on new container %s.", plainDuration(check.Timeout), short), result.Output), nil
 		case runErr != nil:
 			return withOutput(fmt.Sprintf("Check could not run on new container %s: %v.", short, runErr), result.Output), nil
 		case result.ExitCode != 0:
@@ -69,6 +71,18 @@ func runChecks(ctx context.Context, d *Deployment) (reason string, err error) {
 		}
 	}
 	return "", nil
+}
+
+// plainDuration prints 5m, not 5m0s.
+func plainDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
 }
 
 func withOutput(summary, output string) string {
@@ -110,17 +124,28 @@ func (w *errorWatch) observe(e accesslog.Entry) {
 	}
 }
 
-// wait returns true when the errors passed the limit before the window ended.
-func (w *errorWatch) wait(ctx context.Context) (bool, error) {
+type windowEnd int
+
+const (
+	windowClean windowEnd = iota
+	windowTooManyErrors
+	windowBlind
+)
+
+// wait ends when the window does, when the errors pass the limit, or when the
+// log stream breaks, which leaves nothing to watch.
+func (w *errorWatch) wait(ctx context.Context, lost <-chan struct{}) (windowEnd, error) {
 	timer := time.NewTimer(w.rules.Window)
 	defer timer.Stop()
 	select {
 	case <-w.exceeded:
-		return true, nil
+		return windowTooManyErrors, nil
+	case <-lost:
+		return windowBlind, nil
 	case <-timer.C:
-		return false, nil
+		return windowClean, nil
 	case <-ctx.Done():
-		return false, ctx.Err()
+		return windowClean, ctx.Err()
 	}
 }
 
@@ -128,5 +153,5 @@ func (w *errorWatch) reason() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return fmt.Sprintf("The new version returned %d errors within %s (limit %d). Last: %s returned %d.",
-		w.errors, w.rules.Window, w.rules.MaxErrors, w.last.Path, w.last.Status)
+		w.errors, plainDuration(w.rules.Window), w.rules.MaxErrors, w.last.Path, w.last.Status)
 }

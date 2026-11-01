@@ -76,6 +76,16 @@ func runWithBundledProxy(ctx context.Context, proxy *bundledProxy, run func(cont
 	}
 	defer health.ClearReady()
 	defer clearBundledProxyStarted(proxy)
+
+	// A `dr release` run by `docker exec` is another process; it reads the proxy's
+	// requests from this socket.
+	serveCtx, stopServing := context.WithCancel(ctx)
+	defer stopServing()
+	go func() {
+		if err := accesslog.Serve(serveCtx, accesslog.Default, accesslog.SocketPath); err != nil {
+			slog.Error("access log socket stopped; release error rules cannot watch", "component", "main", "err", err)
+		}
+	}()
 	skip, set := os.LookupEnv("DR_PROXY_SKIP_CONFIG")
 	if !set && proxy.name == "nginx" {
 		skip = os.Getenv("DR_NGINX_SKIP_CONFIG")

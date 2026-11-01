@@ -11,10 +11,10 @@ import (
 
 // Entry is one request the proxy answered.
 type Entry struct {
-	Status   int
-	Upstream string // `ip:port` of the app container that answered
-	Host     string
-	Path     string // URL path without the query string
+	Status   int    `json:"status"`
+	Upstream string `json:"upstream"` // `ip:port` of the app container that answered
+	Host     string `json:"host"`
+	Path     string `json:"path"` // URL path without the query string
 }
 
 // Parser turns one log line into an Entry. It reports false for lines that are

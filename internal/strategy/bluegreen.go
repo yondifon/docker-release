@@ -59,13 +59,18 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 	}
 
 	var watch *errorWatch
+	var lost <-chan struct{}
 	if check.Watch {
 		if d.Requests == nil {
 			return fmt.Errorf("release.check error rules need the bundled proxy's access log, which is not available")
 		}
 		watch = newErrorWatch(check, d.New)
-		stopWatching := d.Requests.Subscribe(watch.observe)
+		stopWatching, lostStream, err := d.Requests.Subscribe(watch.observe)
+		if err != nil {
+			return err
+		}
 		defer stopWatching()
+		lost = lostStream
 	}
 
 	slog.Info("all green containers healthy, cutting over traffic", "component", "blue-green", "service", d.Service)
@@ -92,7 +97,7 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 	}
 
 	if watch != nil {
-		if err := bg.settleAfterWindow(ctx, d, watch); err != nil {
+		if err := bg.settleAfterWindow(ctx, d, watch, lost); err != nil {
 			return err
 		}
 	} else if err := bg.settleAfterSoak(ctx, d); err != nil {
@@ -113,14 +118,17 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 
 // settleAfterWindow watches green for the check window, then removes blue. Too
 // many errors send users back to blue instead.
-func (bg *BlueGreen) settleAfterWindow(ctx context.Context, d *Deployment, watch *errorWatch) error {
+func (bg *BlueGreen) settleAfterWindow(ctx context.Context, d *Deployment, watch *errorWatch, lost <-chan struct{}) error {
 	slog.Info("watching green for errors before removing blue", "component", "blue-green", "service", d.Service, "window", watch.rules.Window)
-	exceeded, err := watch.wait(ctx)
+	end, err := watch.wait(ctx, lost)
 	if err != nil {
 		return err
 	}
-	if exceeded {
+	switch end {
+	case windowTooManyErrors:
 		return bg.undoAfterSwitch(ctx, d, watch.reason())
+	case windowBlind:
+		return bg.undoAfterSwitch(ctx, d, "The proxy's access log stopped, so the new version could not be watched.")
 	}
 	removeContainers(ctx, "blue-green", bg.docker, d.Old)
 	return nil

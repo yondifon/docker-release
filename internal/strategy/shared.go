@@ -61,6 +61,14 @@ func rollbackWithFailure(ctx context.Context, tag string, docker DockerOps, prov
 		return fmt.Errorf("reloading provider: %w", err)
 	}
 
+	// The proxy's old workers can still hold requests for the new containers
+	// for a moment after the reload, so give them the drain time to finish.
+	select {
+	case <-time.After(d.Config.DrainTimeout):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 	removeContainers(ctx, tag, docker, d.New)
 
 	ds := &state.DeploymentState{

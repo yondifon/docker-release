@@ -79,7 +79,7 @@ func (c *Controller) ReleaseFailure(project, service string) error {
 	if err != nil || ds.Failure == "" {
 		return nil
 	}
-	return fmt.Errorf("release undone. %s\nThe old version is still serving", ds.Failure)
+	return fmt.Errorf("release undone. %s\nThe old version is still serving. Fix the problem, then release again", ds.Failure)
 }
 
 // Release triggers a deployment for the given project and service. project is
