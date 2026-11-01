@@ -30,7 +30,7 @@ services:
       - "--providers.file.watch=true"
     ports:
       - "8082:80"
-      - "8083:8080"
+      - "127.0.0.1:8083:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik-dynamic:/etc/traefik/dynamic:ro

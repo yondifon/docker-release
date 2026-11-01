@@ -93,7 +93,7 @@ func (p *NginxProxyProvider) GenerateConfig(ctx context.Context, state *Upstream
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.services[state.Service] = state
+	p.services[state.ResolveUpstreamName()] = state
 
 	return p.writeTemplate()
 }

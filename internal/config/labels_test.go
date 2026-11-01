@@ -18,6 +18,9 @@ func TestParseLabelsRejectsUnsafeConfigurations(t *testing.T) {
 		{"release.nginx.ssl.cert": "/certs/app/fullchain.pem"},
 		{"release.nginx.ssl.redirect": "true"},
 		{"release.upstream": `app"; rm -rf /`},
+		{"release.host": "attacker.example.com,\nvictim.example.com"},
+		{"release.host": "app.example.com", "release.tls.cert": "/dev/zero", "release.tls.key": "/dev/zero"},
+		{"release.provider": "angie", "release.affinity": "cookie", "release.angie.sticky.learn.name": "x; } server { listen 8081; location / { root /; autoindex on; } } upstream z { #"},
 	}
 	for _, labels := range cases {
 		if _, exists := labels["release.enable"]; !exists {

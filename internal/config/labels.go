@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,10 @@ var validUpstreamName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 var validRoutePath = regexp.MustCompile(`^/[a-zA-Z0-9._~/%-]*$`)
 var validRouteHost = regexp.MustCompile(`^[a-zA-Z0-9_](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9_])?$`)
 var validTLSPath = regexp.MustCompile(`^/[a-zA-Z0-9/._+@%-]+$`)
+
+// Cert and key files are read by the controller, so device and kernel files
+// such as /dev/zero must not be accepted.
+var tlsPathBlockedPrefixes = []string{"/dev/", "/proc/", "/sys/"}
 
 type Strategy string
 
@@ -242,13 +247,18 @@ func (c *ServiceConfig) validate() error {
 		return fmt.Errorf("upstream name %q must match [a-zA-Z0-9._-]+", c.UpstreamName)
 	}
 
+	if c.AngieStickyLearnName != "" && !validUpstreamName.MatchString(c.AngieStickyLearnName) {
+		return fmt.Errorf("angie sticky learn name %q must match [a-zA-Z0-9._-]+", c.AngieStickyLearnName)
+	}
+
 	if c.RoutePath != "" && !validRoutePath.MatchString(c.RoutePath) {
 		return fmt.Errorf("release.path %q must start with / and contain only URL path characters", c.RoutePath)
 	}
 
 	if c.RouteHost != "" {
 		for _, host := range strings.Split(c.RouteHost, ",") {
-			host = strings.TrimSpace(host)
+			// Trim spaces only: a newline or other whitespace must fail the check below.
+			host = strings.Trim(host, " ")
 			if strings.HasPrefix(host, "*.") {
 				host = strings.TrimPrefix(host, "*.")
 			} else {
@@ -278,7 +288,7 @@ func (c *ServiceConfig) validate() error {
 		if p == "" {
 			continue
 		}
-		if containsDotDot(p) || !validTLSPath.MatchString(p) {
+		if containsDotDot(p) || !validTLSPath.MatchString(p) || slices.ContainsFunc(tlsPathBlockedPrefixes, func(prefix string) bool { return strings.HasPrefix(p, prefix) }) {
 			return fmt.Errorf("TLS paths must be absolute and contain only letters, numbers, /, ., _, +, @, %% or -")
 		}
 	}

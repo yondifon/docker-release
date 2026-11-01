@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,9 @@ type QueuedReleaseCommand struct {
 }
 
 func (m *Manager) EnqueueReleaseCommand(service string, force bool) (*ReleaseCommand, error) {
+	if err := errors.Join(validateName(m.project), validateName(service)); err != nil {
+		return nil, err
+	}
 	cmd := &ReleaseCommand{
 		ID:        GenerateDeploymentID(),
 		Project:   m.project,
