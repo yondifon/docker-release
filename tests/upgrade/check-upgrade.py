@@ -65,7 +65,7 @@ class Stack:
         command = ["env", f"PWD={HERE}", "docker", "compose"]
         if self.mode == "host-options":
             command += ["--env-file", str(HOST_TMP / "explicit.env")]
-            if args[0] == "up":
+            if args[0] in ("up", "down"):
                 command += ["--profile", "production"]
         for file in self.files:
             command += ["-f", file]
@@ -355,7 +355,8 @@ def seed_volume(stack):
 
 
 def teardown(stack):
-    stack.compose("down", "-v", "--remove-orphans", timeout=180, check=False)
+    stack.compose("down", "-v", "--remove-orphans", timeout=180)
+    require(not app_containers(running_only=False), "teardown left an app container behind")
 
 
 def diagnostics(stack):
