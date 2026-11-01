@@ -23,7 +23,6 @@ services:
     stop_grace_period: 90s
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - .:${PWD}:ro
       - docker-release-state:/var/lib/docker-release
 
   app:
@@ -54,7 +53,7 @@ Open `http://app.localhost/`. Browsers send `*.localhost` to your own machine. I
 
 - Your app needs a Docker health check. A new container gets traffic only after it is healthy.
 - Requests go to your app's lowest exposed port, or port 80 if it exposes none. Do not publish the app's ports.
-- Keep the project mount, the third volume. [What it does](docs/bundled-images.md#project-mount).
+- The host command applies Compose file changes without a project mount. [Project file access](docs/bundled-images.md#project-mount).
 - The state volume keeps rollback history when you recreate the service.
 - In production, pin a version such as `:0.2.0` instead of `latest`.
 
@@ -75,6 +74,8 @@ Every bundle uses the same Compose service and labels. To change proxy, change t
 Per-proxy details are in the [provider guides](docs/readme.md#provider-guides).
 
 ## Install CLI
+
+The host needs the Docker Compose plugin (`docker compose`), which is included in most Docker installations. Update the host CLI plugin and controller image together.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/yondifon/docker-release/main/scripts/docker-release \

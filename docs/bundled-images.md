@@ -30,9 +30,11 @@ Caddy, HAProxy, and Traefik app releases keep existing client connections open. 
 
 ## Project mount
 
-The `.:${PWD}:ro` line in the quick start gives the bundle read access to your project folder, at the same path as on the host. A release then starts new containers with `docker compose`, so changes to your Compose file apply. Run `docker compose` from the project directory.
+No project mount is needed for `docker release app`. The host command resolves your Compose configuration on the host and sends it to the controller over stdin, so Compose file changes apply. Run it from the project directory. The host needs the Docker Compose plugin (`docker compose`), which is included in most Docker installations.
 
-Without it, the bundle copies the running container: the new image's settings apply, but Compose file changes do not.
+Update the host CLI plugin and controller image together. An existing `.:${PWD}:ro` project mount remains supported; you can keep it or remove it.
+
+Direct controller commands and API, web, or queued detached releases without readable project files copy running containers and do not pick up Compose file changes.
 
 ## Routing labels
 
