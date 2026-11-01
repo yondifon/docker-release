@@ -177,6 +177,7 @@ func renderNginxServerBlock(b *strings.Builder, state *UpstreamState, route Ngin
 		fmt.Fprintf(b, "    listen 80;\n")
 	}
 	fmt.Fprintf(b, "    server_name %s;\n", normalizeNginxHost(route.Host))
+	fmt.Fprintf(b, "    absolute_redirect off;\n")
 
 	if ssl {
 		fmt.Fprintf(b, "    ssl_certificate %s;\n", route.SSLCert)
