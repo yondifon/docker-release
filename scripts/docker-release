@@ -112,6 +112,19 @@ _dr_find_selected_controller() {
   done
 }
 
+_dr_compose_selection() {
+  compose_environment=$(docker compose config --environment --no-interpolate --no-env-resolution --no-consistency) || return 1
+  while IFS= read -r entry; do
+    case "$entry" in
+      COMPOSE_FILE=*) COMPOSE_FILE=${entry#*=} ;;
+      COMPOSE_PATH_SEPARATOR=*) COMPOSE_PATH_SEPARATOR=${entry#*=} ;;
+    esac
+  done <<EOF
+$compose_environment
+EOF
+  unset compose_environment entry
+}
+
 sync_release=true
 case "$1" in
   ""|watch|rollback|status|healthcheck|version|help|-*) sync_release=false ;;
@@ -139,6 +152,9 @@ if [ "$sync_release" = true ]; then
   compose_project_override=""
   controller_global=""
   cid=""
+  if [ -z "$compose_file" ] && [ -z "$COMPOSE_FILE" ]; then
+    _dr_compose_selection || exit 1
+  fi
   if [ -n "$compose_file" ]; then
     compose_workdir=$(CDPATH= cd -- "$(dirname "$compose_file")" && pwd) || exit 1
     compose_files="$compose_workdir/$(basename "$compose_file")"

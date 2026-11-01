@@ -237,6 +237,34 @@ func TestHostReleaseTargetsProjectStartedWithComposeProjectOverride(t *testing.T
 	}
 }
 
+func TestHostReleaseUsesComposeFileSelectedByDotEnv(t *testing.T) {
+	realDocker := realPluginCompose(t)
+	dir := newPluginHarness(t)
+	t.Setenv("PLUGIN_REAL_DOCKER", realDocker)
+	if err := os.Unsetenv("COMPOSE_FILE"); err != nil {
+		t.Fatal(err)
+	}
+	a := filepath.Join(dir, "compose.yml")
+	b := filepath.Join(dir, "other.yml")
+	for path, contents := range map[string]string{
+		a:                          "name: a\nservices:\n  app:\n    image: alpine:a\n",
+		b:                          "name: b\nservices:\n  app:\n    image: alpine:b\n",
+		filepath.Join(dir, ".env"): "COMPOSE_FILE=other.yml\n",
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writePluginJSON(t, filepath.Join(dir, "fixture.json"), pluginFixture{
+		Controllers: map[string]string{"a": "controller-a", "b": "controller-b"}, Source: dir, Files: b,
+		ControllerFiles: map[string]string{"a": a, "b": b},
+	})
+	result := runPlugin(t, dir, "app")
+	if result.Controller != "controller-b" || result.Project != "b" || result.Image != "alpine:b" {
+		t.Fatalf("release ignored Compose's dotenv file selection: %+v", result)
+	}
+}
+
 func TestHostModelResolvesRelativeSeccompAgainstProject(t *testing.T) {
 	dir := newPluginHarness(t)
 	if err := os.WriteFile(filepath.Join(dir, "seccomp.json"), []byte(`{"defaultAction":"SCMP_ACT_ALLOW"}`), 0600); err != nil {
