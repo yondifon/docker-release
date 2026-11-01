@@ -49,10 +49,8 @@ services:
       - "release.drain_timeout=5s"
       - "release.health_check_timeout=30s"
       - "traefik.enable=true"
-      - "traefik.http.routers.linear-app.rule=PathPrefix(`/linear`)"
+      - "traefik.http.routers.linear-app.rule=Host(`linear.localhost`)"
       - "traefik.http.routers.linear-app.service=linear_app@file"
-      - "traefik.http.routers.linear-app.middlewares=strip-linear"
-      - "traefik.http.middlewares.strip-linear.stripprefix.prefixes=/linear"
 
   canary_app:
     image: traefik/whoami
@@ -72,10 +70,8 @@ services:
       - "release.drain_timeout=5s"
       - "release.health_check_timeout=30s"
       - "traefik.enable=true"
-      - "traefik.http.routers.canary-app.rule=PathPrefix(`/canary`)"
+      - "traefik.http.routers.canary-app.rule=Host(`canary.localhost`)"
       - "traefik.http.routers.canary-app.service=canary_app@file"
-      - "traefik.http.routers.canary-app.middlewares=strip-canary"
-      - "traefik.http.middlewares.strip-canary.stripprefix.prefixes=/canary"
 
   blue_green_app:
     image: traefik/whoami
@@ -93,10 +89,8 @@ services:
       - "release.drain_timeout=5s"
       - "release.health_check_timeout=30s"
       - "traefik.enable=true"
-      - "traefik.http.routers.blue-green-app.rule=PathPrefix(`/bluegreen`)"
+      - "traefik.http.routers.blue-green-app.rule=Host(`bluegreen.localhost`)"
       - "traefik.http.routers.blue-green-app.service=blue_green_app@file"
-      - "traefik.http.routers.blue-green-app.middlewares=strip-blue-green"
-      - "traefik.http.middlewares.strip-blue-green.stripprefix.prefixes=/bluegreen"
 
 volumes:
   docker-release-state:

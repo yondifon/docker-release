@@ -21,7 +21,6 @@ services:
     environment:
       - WHOAMI_NAME=beta-app
       - VIRTUAL_HOST=beta.localhost
-      - VIRTUAL_PATH=/
       - VIRTUAL_DEST=/
     labels:
       - "release.enable=true"
@@ -34,8 +33,7 @@ services:
     networks: [web]
     environment:
       - WHOAMI_NAME=beta-canary
-      - VIRTUAL_HOST=beta.localhost
-      - VIRTUAL_PATH=/canary/
+      - VIRTUAL_HOST=canary.beta.localhost
       - VIRTUAL_DEST=/
     labels:
       - "release.enable=true"

@@ -27,6 +27,7 @@ services:
     stop_grace_period: 90s
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - .:${PWD}:ro
       - docker-release-state:/var/lib/docker-release
 
   app:
@@ -43,6 +44,8 @@ services:
 volumes:
   docker-release-state:
 ```
+
+The `.:${PWD}:ro` mount lets a release start the new containers with `docker compose`, so changes to your Compose file apply. Run `docker compose` from the project directory. Without it, the bundle copies the running container: the new image's settings apply, but Compose file changes do not.
 
 Run `docker compose up -d`. Point the hostname at your server. Requests go to your app's lowest exposed port, or port 80 if none is exposed. Expose only its HTTP port. The bundle and apps must share a Docker network. Do not publish app ports just for routing.
 

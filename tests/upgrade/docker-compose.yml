@@ -1,0 +1,49 @@
+name: upgrade
+
+# One bundled controller (Angie) and one app with a named volume, a read-only
+# bind mount, a second network and a client that reaches the app by its service
+# name. `check-upgrade.py` builds the `upgrade-app` images.
+
+networks:
+  backend:
+
+volumes:
+  appdata:
+  state:
+
+services:
+  docker-release:
+    build:
+      context: ../../
+      dockerfile: dockerfiles/angie.Dockerfile
+      args:
+        VERSION: local
+    image: docker-release-angie:local
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - state:/var/lib/docker-release
+    command: ["watch"]
+    stop_grace_period: 30s
+    ports:
+      - "8094:80"
+
+  app:
+    image: upgrade-app:${TAG:-latest}
+    environment:
+      FROM_COMPOSE: ${FROM_COMPOSE:-one}
+      SHARED_KEY: compose
+    volumes:
+      - appdata:/data
+      - ./bind:/bind:ro
+    networks: [default, backend]
+    labels:
+      release.enable: "true"
+      release.host: app.localhost
+      release.strategy: linear
+      release.health_check_timeout: 20s
+      release.drain_timeout: 2s
+
+  client:
+    image: busybox
+    command: ["sleep", "infinity"]
+    networks: [backend]

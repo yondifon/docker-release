@@ -18,7 +18,6 @@ services:
     environment:
       - WHOAMI_NAME=alpha-app
       - VIRTUAL_HOST=alpha.localhost
-      - VIRTUAL_PATH=/
       - VIRTUAL_DEST=/
     labels:
       - "release.enable=true"
@@ -31,8 +30,7 @@ services:
     networks: [web]
     environment:
       - WHOAMI_NAME=alpha-canary
-      - VIRTUAL_HOST=alpha.localhost
-      - VIRTUAL_PATH=/canary/
+      - VIRTUAL_HOST=canary.alpha.localhost
       - VIRTUAL_DEST=/
     labels:
       - "release.enable=true"

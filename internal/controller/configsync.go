@@ -192,8 +192,9 @@ func (c *Controller) generateServiceConfig(ctx context.Context, key serviceKey, 
 	}
 
 	if !ok {
+		addrs := c.addrResolver(ctx, cfg)
 		for _, ctr := range containers {
-			addr, err := c.docker.ContainerAddr(ctx, ctr.ID)
+			addr, err := addrs.ContainerAddr(ctx, ctr.ID)
 			if err != nil {
 				slog.Warn("resolving container address failed", "component", "controller", "container", ctr.ID[:12], "err", err)
 				continue
@@ -278,9 +279,10 @@ func (c *Controller) deploymentStateUpstream(ctx context.Context, key serviceKey
 		Affinity:     cfg.Affinity,
 	}
 
+	addrs := c.addrResolver(ctx, cfg)
 	stableWeight := 100 - weight
-	c.addWeightedServers(ctx, upstream, containersByID, ds.Containers.Stable, stableWeight, "stable")
-	c.addWeightedServers(ctx, upstream, containersByID, ds.Containers.Canary, weight, "canary")
+	c.addWeightedServers(ctx, addrs, upstream, containersByID, ds.Containers.Stable, stableWeight, "stable")
+	c.addWeightedServers(ctx, addrs, upstream, containersByID, ds.Containers.Canary, weight, "canary")
 
 	if len(upstream.Servers) == 0 {
 		return nil, false
@@ -290,14 +292,14 @@ func (c *Controller) deploymentStateUpstream(ctx context.Context, key serviceKey
 	return upstream, true
 }
 
-func (c *Controller) addWeightedServers(ctx context.Context, upstream *provider.UpstreamState, containersByID map[string]types.Container, ids []string, weight int, group string) {
+func (c *Controller) addWeightedServers(ctx context.Context, addrs proxyAddrs, upstream *provider.UpstreamState, containersByID map[string]types.Container, ids []string, weight int, group string) {
 	for _, id := range ids {
 		ctr, ok := containersByID[id]
 		if !ok {
 			continue
 		}
 
-		addr, err := c.docker.ContainerAddr(ctx, ctr.ID)
+		addr, err := addrs.ContainerAddr(ctx, ctr.ID)
 		if err != nil {
 			slog.Warn("resolving container address failed", "component", "controller", "container", ctr.ID[:12], "err", err)
 			continue

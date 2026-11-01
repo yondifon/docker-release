@@ -22,7 +22,7 @@ mkdir -p .oga_tmp
 docker compose -f tests/caddy-bundled/docker-compose.yml cp \
   docker-release:/var/lib/docker-release/caddy/pki/authorities/local/root.crt .oga_tmp/caddy-root.crt
 curl --cacert .oga_tmp/caddy-root.crt \
-  --resolve linear.localhost:8444:127.0.0.1 https://linear.localhost:8444/linear/
+  --resolve linear.localhost:8444:127.0.0.1 https://linear.localhost:8444/
 docker compose -f tests/caddy-bundled/docker-compose.yml down -v
 rm .oga_tmp/caddy-root.crt
 ```

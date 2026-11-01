@@ -1,0 +1,6 @@
+# Gives the controller the project directory at the same path as on the host,
+# so it can read the compose files. Needs PWD set to that path, as in a shell started in the project directory.
+services:
+  docker-release:
+    volumes:
+      - .:${PWD}:ro

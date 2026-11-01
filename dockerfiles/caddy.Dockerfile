@@ -1,3 +1,4 @@
+ARG COMPOSE_VERSION=v2.40.3
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 ARG VERSION=dev
 ARG TARGETOS
@@ -17,12 +18,15 @@ RUN go mod download
 COPY packaging/caddy/runtime/ ./
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -p 2 -ldflags="-s -w" -o /bin/caddy ./cmd/caddy/
 
+FROM docker/compose-bin:${COMPOSE_VERSION} AS compose
+
 FROM alpine:3.23 AS runtime
 
 RUN apk add --no-cache ca-certificates tini \
   && mkdir -p /etc/caddy /shared/caddy-config
 
 COPY --from=builder /bin/dr /usr/local/bin/dr
+COPY --from=compose /docker-compose /usr/local/bin/docker-compose
 COPY --from=caddy-builder /bin/caddy /usr/bin/caddy
 
 LABEL org.opencontainers.image.title="docker-release" \

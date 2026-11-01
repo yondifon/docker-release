@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -85,6 +86,35 @@ func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 	default:
 		return nil, fmt.Errorf("unknown provider %q", cfg.Provider)
 	}
+}
+
+// ProxyContainerID returns the running container that serves traffic for the
+// service's provider, found the same way the provider finds it to reload. It
+// returns "" when there is none to find (no proxy, or one that is not running).
+func (f *Factory) ProxyContainerID(ctx context.Context, cfg *config.ServiceConfig) string {
+	var service, image string
+	switch cfg.Provider {
+	case config.ProviderNginx:
+		service, image = cfg.NginxService, "nginx"
+	case config.ProviderAngie:
+		service, image = cfg.AngieService, "angie"
+	case config.ProviderCaddy:
+		service, image = cfg.CaddyService, "caddy"
+	case config.ProviderHAProxy:
+		service, image = cfg.HAProxyService, "haproxy"
+	case config.ProviderTraefik:
+		image = "traefik"
+	case config.ProviderNginxProxy:
+		image = "nginx-proxy"
+	default:
+		return ""
+	}
+
+	ctr, running, err := resolveProxyContainer(ctx, f.docker, f.project, service, image)
+	if err != nil || !running {
+		return ""
+	}
+	return ctr.ID
 }
 
 func (f *Factory) nginxProxyProvider(cfg *config.ServiceConfig) (Provider, error) {

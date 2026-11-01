@@ -1,0 +1,5 @@
+# Puts the app on a network the proxy is not on.
+services:
+  app:
+    networks: !override
+      - backend

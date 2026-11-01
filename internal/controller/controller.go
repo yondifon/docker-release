@@ -35,11 +35,13 @@ type Controller struct {
 	stateBaseDir  string
 	stateManagers map[string]*state.Manager
 
-	mu           sync.Mutex
-	deployments  map[string]activeDeployment
-	wg           sync.WaitGroup
-	configMu     sync.Mutex
-	proxyConfigs map[proxyConfigDirs]*config.ServiceConfig
+	mu          sync.Mutex
+	deployments map[string]activeDeployment
+	wg          sync.WaitGroup
+	configMu    sync.Mutex
+	// composeWarned records services already warned about unmounted compose files.
+	composeWarned sync.Map
+	proxyConfigs  map[proxyConfigDirs]*config.ServiceConfig
 }
 
 // New creates a Controller. stateManager is the per-project state manager; in
@@ -199,9 +201,9 @@ func (c *Controller) discoverServices(ctx context.Context) (map[serviceKey][]typ
 
 func (c *Controller) Rollback(ctx context.Context, project, service string) error {
 	project = c.effectiveProject(project)
-	coord := rollback.NewCoordinator(c.managerFor(project), c.docker)
-
 	cfg := c.resolveServiceConfig(ctx, project, service)
+	coord := rollback.NewCoordinator(c.managerFor(project), c.addrResolver(ctx, cfg))
+
 	prov, err := c.factory.Provider(cfg)
 	if err != nil {
 		return fmt.Errorf("building provider: %w", err)

@@ -34,8 +34,7 @@ services:
     image: traefik/whoami
     environment:
       - WHOAMI_NAME=linear
-      - VIRTUAL_HOST=localhost
-      - VIRTUAL_PATH=/linear/
+      - VIRTUAL_HOST=linear.localhost
       - VIRTUAL_DEST=/
     labels:
       - "release.enable=true"
@@ -48,8 +47,7 @@ services:
     image: traefik/whoami
     environment:
       - WHOAMI_NAME=canary
-      - VIRTUAL_HOST=localhost
-      - VIRTUAL_PATH=/canary/
+      - VIRTUAL_HOST=canary.localhost
       - VIRTUAL_DEST=/
     labels:
       - "release.enable=true"
@@ -65,8 +63,7 @@ services:
     image: traefik/whoami
     environment:
       - WHOAMI_NAME=blue_green
-      - VIRTUAL_HOST=localhost
-      - VIRTUAL_PATH=/bluegreen/
+      - VIRTUAL_HOST=bluegreen.localhost
       - VIRTUAL_DEST=/
     labels:
       - "release.enable=true"
