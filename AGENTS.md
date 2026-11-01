@@ -12,6 +12,17 @@ It does **not** proxy traffic. It manages containers and generates proxy config 
 
 ---
 
+## This repo is public
+
+Anything committed or pushed here can be read by anyone, including in PR history, PR descriptions and commit messages.
+
+- Never commit security audit reports, lists of findings, or notes on weaknesses that are not fixed and released yet. A public list of open weaknesses tells people where to attack. Keep reports outside the repo, in `~/desgn/.private/docker-release/`.
+- Commit messages and PR descriptions for security fixes say what the change does ("validate the Angie sticky label"), not how to exploit the old behaviour.
+- Unfixed findings go to the owner in the task report, not into a file in the repo.
+- If such a file was already pushed, deleting it in a new commit is not enough. Rewrite the branch so no commit contains it, then force-push, and tell the owner.
+
+---
+
 ## Architecture
 
 ```
