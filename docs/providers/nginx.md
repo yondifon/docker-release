@@ -80,7 +80,7 @@ Mount extra snippets read-only at these paths. The `proxy` snippet paths work in
 
 The container becomes healthy only after its initial config is ready and Nginx responds at `/health`. A full config override must keep `master_process` enabled and serve HTTP 200 at `http://127.0.0.1/health` without a redirect.
 
-With the bundled image, app responses carry `Connection: close` for a moment before each reload, so clients open a new connection instead of reusing one that Nginx is about to close. Clients that stay idle across a reload still have their connection closed, as with any Nginx reload.
+With the bundled Nginx image, app responses carry `Connection: close` for a moment before each reload, so clients open a new connection instead of reusing one that Nginx is about to close. Clients that stay idle across a reload still have their connection closed, as with any Nginx reload.
 
 Nginx checks each config change before reloading. If it rejects a change, the previous files are restored and the deployment fails. Check the Nginx logs, labels, and mounted certificates before trying again.
 

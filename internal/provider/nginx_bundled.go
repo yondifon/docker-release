@@ -13,7 +13,7 @@ import (
 )
 
 // reloadDrainTime is how long clients get to see `Connection: close` before a reload.
-const reloadDrainTime = 500 * time.Millisecond
+const reloadDrainTime = 250 * time.Millisecond
 
 func confirmBundledReload(ctx context.Context, name string, reload func() error) error {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), name) {
@@ -35,18 +35,23 @@ func confirmBundledReload(ctx context.Context, name string, reload func() error)
 	if len(before) == 0 {
 		return fmt.Errorf("bundled %s has no workers; keep master_process enabled in its config", name)
 	}
-	stopDraining, err := askClientsToReconnect(ctx, name)
-	if err != nil {
-		return err
+	drain := drainsBeforeReload(name)
+	if drain {
+		stopDraining, err := askClientsToReconnect(ctx, name)
+		if err != nil {
+			return err
+		}
+		defer stopDraining()
 	}
-	defer stopDraining()
 	if err := reload(); err != nil {
 		return err
 	}
 	if err := waitForProxyWorkers(ctx, name, pid, before); err != nil {
 		return err
 	}
-	waitForOldWorkersToQuit(ctx, name, pid, before)
+	if drain {
+		waitForOldWorkersToQuit(ctx, name, pid, before)
+	}
 	return nil
 }
 
