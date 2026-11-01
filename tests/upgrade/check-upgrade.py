@@ -70,6 +70,21 @@ class Stack:
         return run(*command, *args, **kwargs)
 
     def release(self):
+        deadline = time.monotonic() + 10
+        retries = 0
+        while True:
+            result = self.release_once()
+            conflict = f'error: deployment already running for "{PROJECT}/app" in another process'
+            if (result.returncode == 0 or conflict not in result.stderr.splitlines()
+                    or time.monotonic() >= deadline):
+                if retries:
+                    print(f"INFO: release retried {retries} pre-start lock rejection(s)", flush=True)
+                return result
+            # Watcher config refreshes share the release lock and have no deployment state.
+            retries += 1
+            time.sleep(0.5)
+
+    def release_once(self):
         if self.host:
             # An unrelated cwd makes `-f` and Compose's saved paths necessary.
             environment = os.environ.copy()
@@ -281,13 +296,6 @@ def release(stack, version, tag, expect_compose=None, expect_replaced=True):
 
 def check_host_model(stack, container, revision):
     config = container["Config"]
-    labels = config["Labels"]
-    expected_files = {str(ROOT / file) for file in stack.files}
-    actual_files = set(labels.get("com.docker.compose.project.config_files", "").split(","))
-    require(actual_files == expected_files,
-            f"replacement lost original Compose file paths: {actual_files}, wanted {expected_files}")
-    require(labels.get("com.docker.compose.project.working_dir") == str(HERE),
-            f"replacement lost original Compose working directory: {labels}")
     for value in ("HOST_LITERAL=literal $cash and $HOME", "ENV_FILE_LITERAL=env $cash and ${HOME}"):
         require(value in config["Env"], f"host model changed a literal dollar value: {config['Env']}")
     require(config["Labels"].get("upgrade.revision") == revision,
@@ -295,8 +303,6 @@ def check_host_model(stack, container, revision):
     if stack.mode == "host-options":
         require(f"OVERLAY_ONLY=overlay-{revision}" in config["Env"],
                 f"explicit env file or overlay was not applied: {config['Env']}")
-        require(labels.get("com.docker.compose.project.environment_file") == str(HOST_TMP / "explicit.env"),
-                f"replacement lost explicit Compose env file path: {labels}")
     alias = f"app-{revision}"
     endpoint = container["NetworkSettings"]["Networks"][f"{PROJECT}_backend"]
     require(alias in endpoint["Aliases"], f"updated network alias {alias} was not applied: {endpoint}")

@@ -31,4 +31,6 @@ In `fallback` mode Compose file changes are ignored, and the controller must log
 
 Both host modes repeat releases using the replacement's original Compose file metadata. A malformed env file must reject a release without restarting or replacing the app, leaving extra containers, or stopping traffic.
 
+Watcher config refreshes can briefly hold the release lock. The check reports and retries only that pre-start rejection for up to 10 seconds; it never retries failed traffic or a release that started.
+
 Last, an `unreachable` stack puts the app on a network the proxy is not on. The release must fail with `not reachable by the proxy` and leave the old container running.
