@@ -63,7 +63,7 @@ volumes:
   docker-release-state:
 ```
 
-Mount each app stack's project directory at its host path, one line per project (`/srv/myapp` above). This lets a release start new containers with `docker compose`, so changes to that stack's Compose file apply. Without the mount, the controller copies the running container: the new image's settings apply, but Compose file changes do not.
+Mount each app stack's project directory at its host path, one line per project (`/srv/myapp` above). See [Project mount](bundled-images.md#project-mount).
 
 Start this once. It runs permanently on the server.
 

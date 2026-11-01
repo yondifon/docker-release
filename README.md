@@ -52,7 +52,7 @@ Open `http://app.localhost/`. Browsers send `*.localhost` to your own machine. O
 
 - Your app needs a Docker health check. A new container gets traffic only after it is healthy.
 - Requests go to your app's lowest exposed port, or port 80 if it exposes none. Do not publish the app's ports.
-- The `.:${PWD}:ro` mount lets a release start the new containers with `docker compose`, so changes to your Compose file apply. Run `docker compose` from the project directory.
+- Keep the project mount. [Why it is there](docs/bundled-images.md#project-mount).
 - The state volume keeps rollback history when you recreate the service.
 - In production, pin a version such as `:0.2.0` instead of `latest`.
 

@@ -20,8 +20,6 @@ The [quick start](../README.md#quick-start) has the complete Compose file. To us
 
 Run `docker compose up -d`. Point the hostname at your server. The bundle and apps must share a Docker network, which Compose gives them by default. Requests go to your app's lowest exposed port, or port 80 if none is exposed. Expose only its HTTP port. Do not publish app ports just for routing.
 
-The `.:${PWD}:ro` mount lets a release start the new containers with `docker compose`, so changes to your Compose file apply. Run `docker compose` from the project directory. Without it, the bundle copies the running container: the new image's settings apply, but Compose file changes do not.
-
 The Docker socket lets docker-release manage containers and grants control of the Docker host. Use bundles only with trusted services. The state volume keeps rollback history when you recreate the bundle. In Caddy, it also keeps certificates and the local certificate authority. Keep this volume when upgrading. Generated proxy files stay inside the bundle and are recreated from app labels.
 
 No environment variables, `release.provider` label, proxy service name, or health check override is needed. The image supplies its own health check. It becomes healthy when routing is ready and the proxy accepts HTTP requests.
@@ -29,6 +27,12 @@ No environment variables, `release.provider` label, proxy service name, or healt
 Deploy with `docker release app` from the [host command](../README.md#install-cli). Keep a health check that proves each app can serve requests.
 
 Caddy, HAProxy, and Traefik app releases keep existing client connections open. Changes to hostnames, routes, or TLS settings can close idle connections; apply those changes during a maintenance window.
+
+## Project mount
+
+The `.:${PWD}:ro` line in the quick start gives the bundle read access to your project folder, at the same path as on the host. A release then starts new containers with `docker compose`, so changes to your Compose file apply. Run `docker compose` from the project directory.
+
+Without it, the bundle copies the running container: the new image's settings apply, but Compose file changes do not.
 
 ## Routing labels
 
