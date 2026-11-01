@@ -12,48 +12,21 @@ Run a proxy and docker-release in one Compose service. Add routing labels to you
 | HAProxy | `malico/docker-release-haproxy:<version>` |
 | Traefik | `malico/docker-release-traefik:<version>` |
 
-Use a release version in production. `latest` follows the newest release. Images support `linux/amd64` and `linux/arm64`.
+Use a release version in production, such as `:0.2.0`. `latest` follows the newest release. Images support `linux/amd64` and `linux/arm64`.
 
 ## Add the service
 
-Copy this service and volume into your Compose file. Add the two labels to an app that has a Docker health check:
+The [quick start](../README.md#quick-start) has the complete Compose file. To use another proxy, change its `image` to a row in the table above.
 
-```yaml
-services:
-  docker-release:
-    image: malico/docker-release-angie:latest
-    ports:
-      - "80:80"
-    stop_grace_period: 90s
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - .:${PWD}:ro
-      - docker-release-state:/var/lib/docker-release
-
-  app:
-    image: your-registry/app:latest
-    labels:
-      release.enable: "true"
-      release.host: app.example.com
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-volumes:
-  docker-release-state:
-```
+Run `docker compose up -d`. Point the hostname at your server. The bundle and apps must share a Docker network, which Compose gives them by default. Requests go to your app's lowest exposed port, or port 80 if none is exposed. Expose only its HTTP port. Do not publish app ports just for routing.
 
 The `.:${PWD}:ro` mount lets a release start the new containers with `docker compose`, so changes to your Compose file apply. Run `docker compose` from the project directory. Without it, the bundle copies the running container: the new image's settings apply, but Compose file changes do not.
-
-Run `docker compose up -d`. Point the hostname at your server. Requests go to your app's lowest exposed port, or port 80 if none is exposed. Expose only its HTTP port. The bundle and apps must share a Docker network. Do not publish app ports just for routing.
 
 The Docker socket lets docker-release manage containers and grants control of the Docker host. Use bundles only with trusted services. The state volume keeps rollback history when you recreate the bundle. In Caddy, it also keeps certificates and the local certificate authority. Keep this volume when upgrading. Generated proxy files stay inside the bundle and are recreated from app labels.
 
 No environment variables, `release.provider` label, proxy service name, or health check override is needed. The image supplies its own health check. It becomes healthy when routing is ready and the proxy accepts HTTP requests.
 
-For later releases, install the [host command](../README.md#install-cli), then run `docker release app`. Keep a health check that proves each app can serve requests.
+Deploy with `docker release app` from the [host command](../README.md#install-cli). Keep a health check that proves each app can serve requests.
 
 Caddy, HAProxy, and Traefik app releases keep existing client connections open. Changes to hostnames, routes, or TLS settings can close idle connections; apply those changes during a maintenance window.
 
@@ -96,7 +69,7 @@ services:
       release.tls.redirect: "true"
 ```
 
-Add these entries to the complete setup above; keep its socket and state mounts and app labels. TLS requires `release.host`. After renewing a certificate, run `docker release app` to apply it. If TLS ends at a proxy in front of the bundle, leave these labels unset and use HTTP between the proxies.
+Add these entries to the [quick start](../README.md#quick-start) file; keep its socket and state mounts and app labels. TLS requires `release.host`. After renewing a certificate, run `docker release app` to apply it. If TLS ends at a proxy in front of the bundle, leave these labels unset and use HTTP between the proxies.
 
 ### Caddy automatic HTTPS
 
