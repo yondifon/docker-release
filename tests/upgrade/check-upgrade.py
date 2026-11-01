@@ -88,15 +88,16 @@ class Stack:
 
     def release_once(self):
         if self.host:
-            # An unrelated cwd makes `-f` and Compose's saved paths necessary.
+            directory = HERE if self.mode == "host" else HOST_TMP
+            command = [str(ROOT / "scripts" / "docker-release")]
+            if self.mode == "host-options":
+                command += ["-f", str(HERE / "docker-compose.yml")]
             environment = os.environ.copy()
             for key in ("COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_ENV_FILES", "COMPOSE_PROFILES",
                         "FROM_COMPOSE", "TAG", "OVERLAY_VALUE"):
                 environment.pop(key, None)
-            environment["PWD"] = str(HOST_TMP)
-            return run(str(ROOT / "scripts" / "docker-release"),
-                       "-f", str(HERE / "docker-compose.yml"), "app",
-                       cwd=HOST_TMP, env=environment, timeout=300, check=False)
+            environment["PWD"] = str(directory)
+            return run(*command, "app", cwd=directory, env=environment, timeout=300, check=False)
         return self.compose("exec", "-T", "docker-release", "dr", "release", "app", timeout=300, check=False)
 
     def check_controller_mounts(self):

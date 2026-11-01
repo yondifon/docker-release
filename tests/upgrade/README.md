@@ -13,7 +13,7 @@ Add `--no-build` to reuse an existing `docker-release-angie:local` image.
 
 `mounted` gives the controller the project directory with one extra line, `- .:${PWD}:ro` in `mounted.yml`. The path inside the controller must match the host path, so Compose can read the files. `fallback` leaves that line out.
 
-`host` invokes the actual `scripts/docker-release -f <absolute-compose-file> app` entrypoint from another directory, without installing the Docker CLI plugin. The controller has only the Docker socket bind, not the project directory. `host-options` does the same with an explicit `--env-file` and an extra overlay used to start the stack; the plugin must recover those settings from Compose labels. Its default `.env` contains a wrong value and omits the required image tag.
+`host` invokes the actual `scripts/docker-release app` entrypoint from the project directory, without installing the Docker CLI plugin. The controller has only the Docker socket bind, not the project directory. `host-options` invokes `scripts/docker-release -f <absolute-compose-file> app` from another directory. It starts the stack with an explicit `--env-file` and an extra overlay; the plugin must recover those settings from Compose labels. Its default `.env` contains a wrong value and omits the required image tag.
 
 In `host-options`, the app uses `profiles: [production]`. Stack startup enables `--profile production`; host releases pass no profile flag and clear `COMPOSE_PROFILES`, so the check requires releases of the running app to work without enabling its profile again.
 
