@@ -17,6 +17,10 @@ var Config = []byte(`{
 import /shared/caddy-config/*.caddy
 
 :80 {
+    log {
+        output stdout
+        format json
+    }
     handle /health {
         respond "ok" 200
     }
@@ -27,6 +31,10 @@ import /shared/caddy-config/*.caddy
 }
 
 :443 {
+    log {
+        output stdout
+        format json
+    }
     respond 404
 }
 `)

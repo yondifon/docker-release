@@ -198,6 +198,7 @@ func renderHAProxyFrontend(routes []HAProxyRoute) (string, error) {
 		}
 	}
 	b.WriteString("frontend docker_release\n    bind :80\n")
+	b.WriteString(haproxyLogFormat)
 	if len(certs) > 0 {
 		fmt.Fprintf(&b, "    bind :443 ssl %s\n", strings.Join(certs, " "))
 	}
@@ -226,6 +227,12 @@ func renderHAProxyFrontend(routes []HAProxyRoute) (string, error) {
 	b.WriteString("    http-request return status 404 unless { var(txn.backend) -m found }\n    use_backend %[var(txn.backend)]\n")
 	return b.String(), nil
 }
+
+// haproxyLogFormat adds a `drlog` trailer to each access log line for the
+// controller to read. The `Host` header is captured first, so the log reads it
+// as `capture.req.hdr(0)`. Host and path go through `json`, so a quote or a
+// backslash in client text can't end the quoted value early.
+const haproxyLogFormat = "    capture request header Host len 255\n" + `    log-format "%ci:%cp [%tr] %ft %b/%s %ST %B %{+Q}r drlog status=%ST upstream=\"%si:%sp\" host=\"%[capture.req.hdr(0),json]\" path=\"%[capture.req.uri,field(1,?),json]\""` + "\n"
 
 func haproxyRouteCondition(route HAProxyRoute, i int) string {
 	var conditions []string
