@@ -45,16 +45,131 @@ _dr_project() {
   basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/^-*//;s/-*$//'
 }
 
-project=$(_dr_project)
-cid=$(docker ps \
-  --filter "label=com.docker.compose.project=${project}" \
-  --filter "label=org.opencontainers.image.title=docker-release" \
-  --format "{{.ID}}" | head -1)
+_dr_controller() {
+  docker ps \
+    --filter "label=com.docker.compose.project=${project}" \
+    --filter "label=org.opencontainers.image.title=docker-release" \
+    --format "{{.ID}}" | head -1
+}
+
+_dr_compose_config() {
+  set -- compose
+  [ -z "$project" ] || set -- "$@" -p "$project"
+  [ -z "$compose_workdir" ] || set -- "$@" --project-directory "$compose_workdir"
+  old_ifs=$IFS
+  IFS=,
+  for file in $compose_files; do
+    set -- "$@" -f "$file"
+  done
+  for file in $compose_env_files; do
+    set -- "$@" --env-file "$file"
+  done
+  IFS=$old_ifs
+  docker "$@" config --format json
+}
+
+sync_release=true
+case "$1" in
+  ""|watch|rollback|status|healthcheck|version|help|-*) sync_release=false ;;
+esac
+explicit_project=""
+project_value=false
+for arg in "$@"; do
+  if [ "$project_value" = true ]; then
+    explicit_project=$arg
+    project_value=false
+    continue
+  fi
+  case "$arg" in
+    --project|-p) project_value=true ;;
+    --detach|-d|--help|-h) sync_release=false ;;
+  esac
+done
+
+project=${explicit_project:-$(_dr_project)}
+cid=$(_dr_controller)
+
+if [ "$sync_release" = true ]; then
+  compose_files=""
+  compose_workdir=""
+  compose_env_files=""
+  if [ -n "$compose_file" ]; then
+    compose_workdir=$(CDPATH= cd -- "$(dirname "$compose_file")" && pwd) || exit 1
+    compose_files="$compose_workdir/$(basename "$compose_file")"
+  fi
+
+  if [ -z "$cid" ]; then
+    # Compose resolves names from `.env` and interpolated `name:` fields.
+    project=$explicit_project
+    model=$(_dr_compose_config) || exit 1
+    project=$(printf '%s\n' "$model" | sed -n 's/^  "name": "\([a-z0-9_-]*\)",*$/\1/p')
+    if [ -z "$project" ]; then
+      echo "error: cannot determine project from docker compose config" >&2
+      exit 1
+    fi
+    cid=$(_dr_controller)
+  fi
+fi
 
 if [ -z "$cid" ]; then
   echo "error: docker-release controller not running in project '${project}'" >&2
   echo "       start with: docker compose up -d" >&2
   exit 1
+fi
+
+if [ "$sync_release" = true ]; then
+  service=$1
+  [ "$service" != release ] || service=$2
+  source_cid=$(docker ps \
+    --filter "label=com.docker.compose.project=${project}" \
+    --filter "label=com.docker.compose.service=${service}" \
+    --format "{{.ID}}" | head -1)
+  source_cid=${source_cid:-$cid}
+  source_template='{{- $prefix := "com.docker.compose.project." -}}
+{{- if index .Config.Labels "io.docker-release.compose.config_files" -}}
+{{- $prefix = "io.docker-release.compose." -}}
+{{- end -}}
+{{- index .Config.Labels (printf "%sworking_dir" $prefix) -}}{{- "\n" -}}
+{{- index .Config.Labels (printf "%sconfig_files" $prefix) -}}{{- "\n" -}}
+{{- index .Config.Labels (printf "%senvironment_file" $prefix) -}}'
+  source=$(docker inspect --format "$source_template" "$source_cid") || exit 1
+  saved_files=$(printf '%s\n' "$source" | sed -n '2p')
+  if [ -n "$compose_file" ]; then
+    # The base file still needs the overlays used to start this stack.
+    case "$saved_files" in
+      "$compose_files"|"$compose_files",*)
+        compose_files=$saved_files
+        compose_workdir=$(printf '%s\n' "$source" | sed -n '1p')
+        ;;
+    esac
+  fi
+  if [ -z "$compose_file" ] && [ -z "$COMPOSE_FILE" ]; then
+    compose_workdir=$(printf '%s\n' "$source" | sed -n '1p')
+    compose_files=$saved_files
+    case "$compose_files" in "<no value>"|-) compose_files="" ;; esac
+    [ "$compose_workdir" != "<no value>" ] || compose_workdir=""
+  fi
+  compose_env_files=$(printf '%s\n' "$source" | sed -n '3p')
+  [ "$compose_env_files" != "<no value>" ] || compose_env_files=""
+  if [ -n "$COMPOSE_FILE" ] && [ -z "$compose_file" ]; then
+    compose_files=""
+    old_ifs=$IFS
+    IFS=${COMPOSE_PATH_SEPARATOR:-:}
+    for file in $COMPOSE_FILE; do
+      dir=$(CDPATH= cd -- "$(dirname "$file")" && pwd) || exit 1
+      [ -n "$compose_workdir" ] || compose_workdir=$dir
+      compose_files="${compose_files:+$compose_files,}$dir/$(basename "$file")"
+    done
+    IFS=$old_ifs
+  fi
+  model=$(_dr_compose_config) || exit 1
+  printf '%s\n' "$model" | docker exec -i \
+    -e DR_COMPOSE_CONFIG_STDIN=1 \
+    -e "DR_COMPOSE_CONFIG_WORKING_DIR=$compose_workdir" \
+    -e "DR_COMPOSE_CONFIG_FILES=$compose_files" \
+    -e "DR_COMPOSE_CONFIG_ENV_FILES=$compose_env_files" \
+    "$cid" dr "$@"
+  exit $?
 fi
 
 exec docker exec "$cid" dr "$@"

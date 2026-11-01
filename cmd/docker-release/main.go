@@ -179,16 +179,42 @@ func runRelease(ctrl *controller.Controller, project, service string, opts relea
 	if opts.detach {
 		return ctrl.EnqueueRelease(project, service, opts.force)
 	}
+	var composeConfig *docker.ComposeConfig
+	if os.Getenv("DR_COMPOSE_CONFIG_STDIN") == "1" {
+		var err error
+		composeConfig, err = docker.ReadComposeConfig(os.Stdin)
+		if err != nil {
+			return err
+		}
+		composeConfig.Source = docker.ComposeProject{
+			WorkingDir:  os.Getenv("DR_COMPOSE_CONFIG_WORKING_DIR"),
+			ConfigFiles: splitComposePaths(os.Getenv("DR_COMPOSE_CONFIG_FILES")),
+			EnvFiles:    splitComposePaths(os.Getenv("DR_COMPOSE_CONFIG_ENV_FILES")),
+		}
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if err := ctrl.Release(ctx, project, service, opts.force); err != nil {
+	var err error
+	if composeConfig != nil {
+		err = ctrl.ReleaseWithComposeConfig(ctx, project, service, opts.force, composeConfig)
+	} else {
+		err = ctrl.Release(ctx, project, service, opts.force)
+	}
+	if err != nil {
 		return err
 	}
 
 	ctrl.WaitDeployments()
 	return nil
+}
+
+func splitComposePaths(value string) []string {
+	if value == "" {
+		return nil
+	}
+	return strings.Split(value, ",")
 }
 
 // run resolves the compose project and creates the controller, then calls fn.
