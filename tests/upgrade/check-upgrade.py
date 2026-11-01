@@ -3,17 +3,17 @@
 Usage (from the repo root):
     python3 tests/upgrade/check-upgrade.py mounted
     python3 tests/upgrade/check-upgrade.py fallback
+    python3 tests/upgrade/check-upgrade.py host
+    python3 tests/upgrade/check-upgrade.py host-options
 
-`mounted` gives the controller the project directory, so it can run Docker
-Compose itself. `fallback` does not, so the controller copies the old container
-and refreshes it from the new image. Compose file changes only apply in
-`mounted` mode. Each mode then runs an `unreachable` stack, where the proxy
-shares no network with the app and the release must fail without touching the
-old container.
+Host modes invoke the host plugin without a project mount. `host-options`
+also uses an explicit env file and an extra overlay. All modes finish with
+an unreachable proxy check.
 """
 import argparse
 import http.client
 import json
+import os
 import pathlib
 import subprocess
 import threading
@@ -27,6 +27,7 @@ HOST = "app.localhost"
 PROJECT = "upgrade"
 COMPOSE_MISSING = "compose files are not mounted"
 BUILT_IMAGES = []
+HOST_TMP = HERE / ".oga_tmp"
 
 
 class CheckFailed(AssertionError):
@@ -38,27 +39,64 @@ def require(condition, message):
         raise CheckFailed(message)
 
 
-def run(*args, timeout=120, check=True):
-    result = subprocess.run(args, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+def run(*args, timeout=120, check=True, cwd=ROOT, env=None):
+    result = subprocess.run(args, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
     if check and result.returncode != 0:
         raise CheckFailed(f"{' '.join(args)} failed ({result.returncode}):\n{result.stdout}{result.stderr}")
     return result
 
 
 class Stack:
-    def __init__(self, mounted, unreachable=False):
+    def __init__(self, mode, unreachable=False):
+        self.mode = mode
+        self.host = mode in ("host", "host-options")
         self.files = ["tests/upgrade/docker-compose.yml"]
-        if mounted:
+        if mode == "mounted":
             self.files.append("tests/upgrade/mounted.yml")
+        if self.host:
+            self.files.append("tests/upgrade/host.yml")
+        if mode == "host-options":
+            self.files.append("tests/upgrade/host-options.yml")
         if unreachable:
             self.files.append("tests/upgrade/unreachable.yml")
 
     def compose(self, *args, **kwargs):
         # The overlay mounts `.:${PWD}`, as in the docs, so PWD must be the project directory.
         command = ["env", f"PWD={HERE}", "docker", "compose"]
+        if self.mode == "host-options":
+            command += ["--env-file", str(HOST_TMP / "explicit.env")]
         for file in self.files:
             command += ["-f", file]
         return run(*command, *args, **kwargs)
+
+    def release(self):
+        if self.host:
+            # An unrelated cwd makes `-f` and Compose's saved paths necessary.
+            environment = os.environ.copy()
+            for key in ("COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_ENV_FILES",
+                        "FROM_COMPOSE", "TAG", "OVERLAY_VALUE"):
+                environment.pop(key, None)
+            environment["PWD"] = str(HOST_TMP)
+            return run(str(ROOT / "scripts" / "docker-release"),
+                       "-f", str(HERE / "docker-compose.yml"), "app",
+                       cwd=HOST_TMP, env=environment, timeout=300, check=False)
+        return self.compose("exec", "-T", "docker-release", "dr", "release", "app", timeout=300, check=False)
+
+    def check_controller_mounts(self):
+        controller = self.compose("ps", "-q", "docker-release").stdout.strip()
+        mounts = inspect(controller)["Mounts"]
+        binds = [mount for mount in mounts if mount["Type"] == "bind"]
+        require(len(binds) == 1 and binds[0]["Destination"] == "/var/run/docker.sock",
+                f"controller must have only the Docker socket bind, not project files: {mounts}")
+        pass_(f"{self.mode}: controller has no project bind mount")
+
+    def write_env(self, value, tag="latest"):
+        text = f"FROM_COMPOSE={value}\nTAG={tag}\n"
+        path = HERE / ".env"
+        if self.mode == "host-options":
+            path = HOST_TMP / "explicit.env"
+            text += f"OVERLAY_VALUE=overlay-{value}\n"
+        path.write_text(text)
 
     def logs(self):
         return self.compose("logs", "--no-color", "docker-release", timeout=60).stdout
@@ -163,7 +201,7 @@ def release(stack, version, tag, expect_compose=None, expect_replaced=True):
     traffic = Traffic()
     traffic.start()
     try:
-        result = stack.compose("exec", "-T", "docker-release", "dr", "release", "app", timeout=300, check=False)
+        result = stack.release()
     finally:
         traffic.finish()
     output = result.stdout + result.stderr
@@ -225,6 +263,9 @@ def release(stack, version, tag, expect_compose=None, expect_replaced=True):
         require("app" in (endpoint.get("Aliases") or []), f"network {name} has no alias `app`: {endpoint.get('Aliases')}")
     pass_(f"v{version}: joined both networks with the `app` alias")
 
+    if stack.host:
+        check_host_model(stack, new, expect_compose or "one")
+
     require(old["Id"] not in app_containers(running_only=False), "the old container still exists")
     by_name = stack.compose("exec", "-T", "client", "wget", "-qO-", "-T", "3", "http://app/", check=False)
     require(by_name.returncode == 0 and f"image={version}" in by_name.stdout,
@@ -236,6 +277,59 @@ def release(stack, version, tag, expect_compose=None, expect_replaced=True):
     require(hostname == new["Id"][:12], f"hostname {hostname} is not the container's own ID {new['Id'][:12]}")
     pass_(f"v{version}: hostname is the new container's own")
     return output
+
+
+def check_host_model(stack, container, revision):
+    config = container["Config"]
+    labels = config["Labels"]
+    expected_files = {str(ROOT / file) for file in stack.files}
+    actual_files = set(labels.get("com.docker.compose.project.config_files", "").split(","))
+    require(actual_files == expected_files,
+            f"replacement lost original Compose file paths: {actual_files}, wanted {expected_files}")
+    require(labels.get("com.docker.compose.project.working_dir") == str(HERE),
+            f"replacement lost original Compose working directory: {labels}")
+    for value in ("HOST_LITERAL=literal $cash and $HOME", "ENV_FILE_LITERAL=env $cash and ${HOME}"):
+        require(value in config["Env"], f"host model changed a literal dollar value: {config['Env']}")
+    require(config["Labels"].get("upgrade.revision") == revision,
+            f"updated Compose label was not applied: {config['Labels']}")
+    if stack.mode == "host-options":
+        require(f"OVERLAY_ONLY=overlay-{revision}" in config["Env"],
+                f"explicit env file or overlay was not applied: {config['Env']}")
+        require(labels.get("com.docker.compose.project.environment_file") == str(HOST_TMP / "explicit.env"),
+                f"replacement lost explicit Compose env file path: {labels}")
+    alias = f"app-{revision}"
+    endpoint = container["NetworkSettings"]["Networks"][f"{PROJECT}_backend"]
+    require(alias in endpoint["Aliases"], f"updated network alias {alias} was not applied: {endpoint}")
+    response = stack.compose("exec", "-T", "client", "wget", "-qO-", "-T", "3", f"http://{alias}/")
+    require(f"host={config['Hostname']}" in response.stdout,
+            f"updated alias does not reach the replacement: {response.stdout}")
+    marker = run("docker", "exec", container["Id"], "cat", "/host-files/marker").stdout.strip()
+    require(marker == "host-path-ok", f"relative bind path with dollars or spaces was not preserved: {marker!r}")
+    pass_(f"{stack.mode}: dollars, env file, bind path, updated label and network alias applied")
+
+
+def rejected_host_config(stack):
+    before = app_containers()
+    require(len(before) == 1, f"expected one app before invalid config, got {before}")
+    original = inspect(before[0])
+    env_file = HOST_TMP / "explicit.env" if stack.mode == "host-options" else HERE / ".env"
+    contents = env_file.read_text()
+    try:
+        env_file.write_text('FROM_COMPOSE="unterminated\n')
+        result = stack.release()
+        require(result.returncode != 0,
+                f"host release accepted malformed env file:\n{result.stdout}{result.stderr}")
+        require(app_containers(running_only=False) == before,
+                "invalid host config replaced the old app or left an extra container")
+        current = inspect(before[0])
+        require(current["State"]["StartedAt"] == original["State"]["StartedAt"],
+                "invalid host config restarted the old app")
+        require(current["Config"] == original["Config"] and current["Image"] == original["Image"],
+                "invalid host config changed the old app")
+        wait_for_body(f"host={original['Config']['Hostname']}", "after rejecting invalid host config")
+        pass_(f"{stack.mode}: malformed env file rejected; original app still serves, no extras")
+    finally:
+        env_file.write_text(contents)
 
 
 def seed_volume(stack):
@@ -256,13 +350,27 @@ def diagnostics(stack):
     print(logs.stdout + logs.stderr, flush=True)
 
 
-def prepare():
+def prepare(mode):
     (HERE / ".env").unlink(missing_ok=True)
     (HERE / "bind").mkdir(exist_ok=True)
     (HERE / "bind" / "marker").write_text("bind-ok\n")
+    if mode in ("host", "host-options"):
+        HOST_TMP.mkdir(exist_ok=True)
+        (HOST_TMP / "host $ files").mkdir(exist_ok=True)
+        (HOST_TMP / "host $ files" / "marker").write_text("host-path-ok\n")
+        (HOST_TMP / "app values.env").write_text("ENV_FILE_LITERAL='env $cash and ${HOME}'\n")
+    if mode == "host-options":
+        (HERE / ".env").write_text("FROM_COMPOSE=wrong-default\nTAG=wrong-default\n")
+        (HOST_TMP / "explicit.env").write_text("FROM_COMPOSE=one\nTAG=latest\nOVERLAY_VALUE=overlay-one\n")
 
 
 def cleanup():
+    for file in ("explicit.env", "app values.env", "host $ files/marker"):
+        (HOST_TMP / file).unlink(missing_ok=True)
+    if (HOST_TMP / "host $ files").exists():
+        (HOST_TMP / "host $ files").rmdir()
+    if HOST_TMP.exists():
+        HOST_TMP.rmdir()
     (HERE / ".env").unlink(missing_ok=True)
     (HERE / "bind" / "marker").unlink(missing_ok=True)
     try:
@@ -272,33 +380,37 @@ def cleanup():
 
 
 def upgrade_scenario(mode, build_stack):
-    stack = Stack(mounted=mode == "mounted")
-    prepare()
+    stack = Stack(mode)
+    prepare(mode)
     build_app("1", "latest")
     try:
         seed_volume(stack)
         stack.compose(*(["up", "--build"] if build_stack else ["up"]), "-d", "--wait", timeout=600)
+        if mode != "mounted":
+            stack.check_controller_mounts()
         wait_for_body("image=1", "before the first release")
 
         # Same tag, new image: the common case of rebuilding `app:latest`.
         build_app("2", "latest")
         outputs = [release(stack, "2", "latest")]
 
-        if mode == "mounted":
-            # The controller only sees files on disk, not the shell's environment.
-            (HERE / ".env").write_text("FROM_COMPOSE=two\n")
+        if mode != "fallback":
+            stack.write_env("two")
             outputs.append(release(stack, "2", "latest", expect_compose="two"))
 
             build_app("3", "v3")
-            (HERE / ".env").write_text("FROM_COMPOSE=two\nTAG=v3\n")
+            stack.write_env("two", "v3")
             outputs.append(release(stack, "3", "v3", expect_compose="two"))
 
+        if stack.host:
+            rejected_host_config(stack)
+
         logged = COMPOSE_MISSING in "".join(outputs)
-        if mode == "mounted":
-            require(not logged, "`dr release` says compose files are not mounted, but they are")
+        if mode != "fallback":
+            require(not logged, f"{mode}: release fell back to container config instead of the Compose model")
         else:
             require(logged, f"`dr release` did not log `{COMPOSE_MISSING}` in fallback mode")
-        pass_(f"{mode}: `dr release` {'does not log' if mode == 'mounted' else 'logs'} `{COMPOSE_MISSING}`")
+        pass_(f"{mode}: `dr release` {'logs' if mode == 'fallback' else 'does not log'} `{COMPOSE_MISSING}`")
     except BaseException:
         diagnostics(stack)
         raise
@@ -307,18 +419,20 @@ def upgrade_scenario(mode, build_stack):
 
 
 def unreachable_scenario(mode):
-    stack = Stack(mounted=mode == "mounted", unreachable=True)
-    prepare()
+    stack = Stack(mode, unreachable=True)
+    prepare(mode)
     build_app("1", "latest")
     try:
         seed_volume(stack)
         stack.compose("up", "-d", "--wait", timeout=600)
+        if mode != "mounted":
+            stack.check_controller_mounts()
         build_app("2", "latest")
         before = app_containers()
         require(len(before) == 1, f"expected one app container, got {before}")
         started = inspect(before[0])["State"]["StartedAt"]
 
-        result = stack.compose("exec", "-T", "docker-release", "dr", "release", "app", timeout=300, check=False)
+        result = stack.release()
         output = result.stdout + result.stderr
         require(result.returncode != 0, f"`dr release app` succeeded although the proxy cannot reach the app:\n{output}")
         require("not reachable by the proxy" in output, f"the error does not say the container is not reachable by the proxy:\n{output}")
@@ -336,7 +450,7 @@ def unreachable_scenario(mode):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["mounted", "fallback"])
+    parser.add_argument("mode", choices=["mounted", "fallback", "host", "host-options"])
     parser.add_argument("--no-build", action="store_true", help="reuse the existing docker-release-angie:local image")
     args = parser.parse_args()
     try:

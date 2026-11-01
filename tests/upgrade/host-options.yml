@@ -1,0 +1,4 @@
+services:
+  app:
+    environment:
+      OVERLAY_ONLY: ${OVERLAY_VALUE:?set OVERLAY_VALUE in the explicit env file}
