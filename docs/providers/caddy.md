@@ -173,6 +173,20 @@ release.bg.soak_time: 5m
 release.bg.green_weight: 50
 ```
 
+## Preview address
+
+Set `release.preview.host` on a blue/green app to try the new version on its own host before users move; see [Preview address](../readme.md#preview-address).
+
+In the bundle, the route is added for you, and Caddy gets the certificate for the preview host by itself, as it does for the main host.
+
+With a separate Caddy, `docker-release` also writes a snippet `(app_preview_upstream)` into the same file as `(app_upstream)`. During a release it sends requests to the new containers only. The rest of the time it answers 404. Import it in a site block of its own:
+
+```caddy
+next.app.example.com {
+    import app_preview_upstream
+}
+```
+
 ## Notes
 
 - Cookie affinity uses a generated cookie name like `_srr_a172cedcae`.

@@ -131,6 +131,8 @@ release.bg.soak_time: 5m
 release.bg.green_weight: 50
 ```
 
+`release.preview.host` does not work with nginx-proxy, because nginx-proxy takes its hosts from `VIRTUAL_HOST`. The release is refused with a message. Use a [bundled image](../bundled-images.md) or another provider to get a [preview address](../readme.md#preview-address).
+
 ## Notes
 
 - Nginx open source does not support sticky cookies. `release.affinity: cookie` falls back to IP hashing with this provider. Use Angie, Caddy, HAProxy, or Traefik if you need real cookie-based sticky sessions.

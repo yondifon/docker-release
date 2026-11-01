@@ -85,6 +85,33 @@ The error rules need a [bundled proxy image](bundled-images.md), because only a 
 
 In a Compose file, write `$$RELEASE_TARGET` so Compose does not fill in the variable itself.
 
+#### Preview address
+
+Give the new version an address of its own, so you or your tests can try it, sign-up included, before users move:
+
+```yaml
+release.host: app.example.com
+release.preview.host: next.app.example.com
+```
+
+During a blue/green release, `next.app.example.com` shows only the new version, and `app.example.com` keeps showing the old one. The preview address starts working once the new containers are healthy. It stops working, and answers 404, as soon as users move to the new version or the release fails.
+
+If you set `release.check.command`, it runs while the preview address works, and gets one more variable:
+
+| Variable | Value |
+|---|---|
+| `RELEASE_PREVIEW_URL` | The preview address, such as `https://next.app.example.com`. It starts with `https://` when `release.tls.cert` is set, and with `http://` otherwise. |
+
+Before you use it:
+
+- Point the preview host's DNS at the proxy, as you do for `release.host`.
+- Use the same certificate settings as the main host. The certificate must also cover the preview host, for example with a wildcard certificate. Caddy gets its certificate by itself.
+- `release.preview.host` is one hostname. It cannot be a wildcard, and it must differ from `release.host` and from every other service's hosts.
+- It works only with `release.strategy: blue-green`. With the `nginx-proxy` provider it is refused, because that provider reads hosts from `VIRTUAL_HOST`.
+- Anyone who knows the preview address can open it while it works. A token for it comes in a later release.
+
+With a [bundled proxy image](bundled-images.md), the route is added for you. With a separate proxy, `docker-release` writes an upstream for the preview, and you add one rule that uses it; see your proxy's page: [Nginx](providers/nginx.md#preview-address), [Angie](providers/angie.md#preview-address), [Caddy](providers/caddy.md#preview-address), [HAProxy](providers/haproxy.md#preview-address), [Traefik](providers/traefik.md#preview-address).
+
 ### Canary
 
 Sends a small percentage of traffic to new containers, then increases it in steps until the new version takes all traffic.
@@ -147,6 +174,7 @@ release.affinity: cookie  # sticky sessions (Angie, Caddy, HAProxy, Traefik only
 | `release.check.paths` | all paths | Blue/green, bundled images: count only paths that start with one of these |
 | `release.check.max_errors` | `0` | Blue/green, bundled images: errors allowed in the window |
 | `release.check.window` | `5m` | Blue/green, bundled images: how long to watch after users move |
+| `release.preview.host` | empty | Blue/green: a host that shows only the new version until users move; see [Preview address](#preview-address) |
 | `release.canary.start_percentage` | `10` | Canary: initial traffic weight on new containers |
 | `release.canary.step` | `20` | Canary: weight added each interval |
 | `release.canary.interval` | `2m` | Canary: time between weight increases |
