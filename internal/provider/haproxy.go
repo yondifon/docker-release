@@ -3,12 +3,10 @@ package provider
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/malico/docker-release/internal/docker"
-	"github.com/malico/docker-release/internal/health"
 )
 
 type HAProxyProvider struct {
@@ -38,38 +36,16 @@ func (p *HAProxyProvider) GenerateConfig(ctx context.Context, state *UpstreamSta
 		return p.generateBundledConfig(state)
 	}
 
-	conf := renderHAProxyBackend(state)
-
-	if err := os.MkdirAll(p.configDir, 0o755); err != nil {
-		return fmt.Errorf("creating config dir: %w", err)
-	}
-
-	path := filepath.Join(p.configDir, state.Service+".cfg")
-	tmp := path + ".tmp"
-
-	if err := os.WriteFile(tmp, []byte(conf), 0o644); err != nil {
-		return fmt.Errorf("writing config: %w", err)
-	}
-
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("renaming config: %w", err)
-	}
-
-	health.RecordFile(path)
-	return nil
+	return writeConfigFile(filepath.Join(p.configDir, state.Service+".cfg"), []byte(renderHAProxyBackend(state)), "config")
 }
 
 func (p *HAProxyProvider) Reload(ctx context.Context) error {
 	if p.bundled {
 		return p.applyBundledConfigs(ctx, p.pending)
 	}
-	ctr, running, err := resolveProxyContainer(ctx, p.docker, p.project, p.serviceName, "haproxy")
+	ctr, running, err := reloadTarget(ctx, p.docker, p.project, p.serviceName, "haproxy", false, "haproxy")
 	if err != nil {
-		return fmt.Errorf("resolving haproxy container: %w", err)
-	}
-
-	if !matchesImage(ctr.Image, "haproxy", "alpine") {
-		return fmt.Errorf("container %q has unexpected image %q (want haproxy or alpine-based)", ctr.ID[:12], ctr.Image)
+		return err
 	}
 
 	if !running {

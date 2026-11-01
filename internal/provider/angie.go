@@ -3,12 +3,10 @@ package provider
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/malico/docker-release/internal/docker"
-	"github.com/malico/docker-release/internal/health"
 )
 
 type AngieProvider struct {
@@ -39,35 +37,13 @@ func (p *AngieProvider) GenerateConfig(ctx context.Context, state *UpstreamState
 		return err
 	}
 
-	conf := renderAngieUpstream(state)
-
-	if err := os.MkdirAll(p.configDir, 0o755); err != nil {
-		return fmt.Errorf("creating config dir: %w", err)
-	}
-
-	path := filepath.Join(p.configDir, state.Service+".conf")
-	tmp := path + ".tmp"
-
-	if err := os.WriteFile(tmp, []byte(conf), 0o644); err != nil {
-		return fmt.Errorf("writing config: %w", err)
-	}
-
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("renaming config: %w", err)
-	}
-
-	health.RecordFile(path)
-	return nil
+	return writeConfigFile(filepath.Join(p.configDir, state.Service+".conf"), []byte(renderAngieUpstream(state)), "config")
 }
 
 func (p *AngieProvider) Reload(ctx context.Context) error {
-	ctr, running, err := resolveProxyContainer(ctx, p.docker, p.project, p.serviceName, "angie")
+	ctr, running, err := reloadTarget(ctx, p.docker, p.project, p.serviceName, "angie", false, "angie", "nginx")
 	if err != nil {
-		return fmt.Errorf("resolving angie container: %w", err)
-	}
-
-	if !matchesImage(ctr.Image, "angie", "nginx", "alpine") {
-		return fmt.Errorf("container %q has unexpected image %q (want angie, nginx, or alpine-based)", ctr.ID[:12], ctr.Image)
+		return err
 	}
 
 	if !running {
@@ -100,30 +76,7 @@ func renderAngieUpstream(state *UpstreamState) string {
 		fmt.Fprintf(&b, "    least_conn;\n")
 	}
 
-	for _, s := range state.Servers {
-		if s.Backup && !supportsAngieBackup(state.Affinity) {
-			continue
-		}
-
-		fmt.Fprintf(&b, "    server %s", s.Addr)
-
-		if s.Down {
-			fmt.Fprintf(&b, " down")
-		} else if s.Backup {
-			fmt.Fprintf(&b, " backup")
-		} else if s.Weight > 0 {
-			fmt.Fprintf(&b, " weight=%d", s.Weight)
-		}
-
-		fmt.Fprintf(&b, ";\n")
-	}
-	if len(state.Servers) == 0 {
-		fmt.Fprintf(&b, "    server 127.0.0.1:1 down;\n")
-	}
-
-	if state.Keepalive > 0 {
-		fmt.Fprintf(&b, "    keepalive %d;\n", state.Keepalive)
-	}
+	writeNginxServers(&b, state, supportsAngieBackup(state.Affinity), true)
 
 	fmt.Fprintf(&b, "}\n")
 
