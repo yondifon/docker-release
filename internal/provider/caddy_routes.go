@@ -14,6 +14,7 @@ import (
 
 type CaddyRoute struct {
 	Host        string
+	PreviewHost string // answers with the servers in `UpstreamState.Preview`
 	Path        string
 	TLSCert     string
 	TLSKey      string
@@ -61,11 +62,23 @@ func (p *CaddyProvider) generateBundledConfig(state *UpstreamState) error {
 }
 
 func renderCaddySites(state *UpstreamState, route CaddyRoute) string {
-	if route.Host == "" {
-		return ""
+	var b strings.Builder
+	if route.Host != "" {
+		body := renderCaddyHandler(state, route.Path)
+		if route.Path != "" && route.Path != "/" {
+			body += "    handle {\n        respond 404\n    }\n"
+		}
+		b.WriteString(renderCaddySite(route, route.Host, body))
 	}
+	b.WriteString(renderCaddyPreviewSite(state, route))
+	return b.String()
+}
+
+// renderCaddySite writes the site block for `hosts` (comma separated), with the
+// route's http to https redirect, access log and certificate around `body`.
+func renderCaddySite(route CaddyRoute, hosts, body string) string {
 	var httpHosts, httpsHosts []string
-	for _, host := range strings.Split(route.Host, ",") {
+	for _, host := range strings.Split(hosts, ",") {
 		host = strings.TrimSpace(host)
 		httpHosts = append(httpHosts, "http://"+host)
 		httpsHosts = append(httpsHosts, "https://"+host)
@@ -81,12 +94,31 @@ func renderCaddySites(state *UpstreamState, route CaddyRoute) string {
 	if route.TLSCert != "" {
 		fmt.Fprintf(&b, "    tls %s %s\n", route.TLSCert, route.TLSKey)
 	}
-	b.WriteString(renderCaddyHandler(state, route.Path))
-	if route.Path != "" && route.Path != "/" {
-		b.WriteString("    handle {\n        respond 404\n    }\n")
-	}
+	b.WriteString(body)
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// renderCaddyPreviewSite writes the preview host's site block while preview
+// servers exist, and nothing otherwise. It serves `/` and points straight at the
+// preview servers, so the block goes away when the preview ends.
+func renderCaddyPreviewSite(state *UpstreamState, route CaddyRoute) string {
+	if route.PreviewHost == "" {
+		return ""
+	}
+	var addrs []string
+	for _, s := range state.Preview {
+		if !s.Down && !s.Backup {
+			addrs = append(addrs, s.Addr)
+		}
+	}
+	if len(addrs) == 0 {
+		return ""
+	}
+	// The access log reads the app address from this field.
+	body := "    handle {\n        log_append upstream {http.reverse_proxy.upstream.hostport}\n" +
+		"        reverse_proxy " + strings.Join(addrs, " ") + "\n    }\n"
+	return renderCaddySite(route, route.PreviewHost, body)
 }
 
 // caddyAccessLog writes one JSON line per request to stdout.

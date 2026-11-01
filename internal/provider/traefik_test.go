@@ -1,6 +1,9 @@
 package provider
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -190,5 +193,56 @@ func TestTraefikBackupServersDropped(t *testing.T) {
 	}
 	if strings.Contains(got, "172.18.0.2:80") {
 		t.Error("backup server should be silently dropped for traefik")
+	}
+}
+
+func TestTraefikFileAlwaysHasPreviewServiceWhenHostSet(t *testing.T) {
+	dir := t.TempDir()
+	p := NewTraefik(dir)
+	p.route.PreviewHost = "next.app.example.com"
+	state := &UpstreamState{Service: "app", Servers: []Server{{Addr: "10.0.0.1:80"}}}
+
+	read := func() string {
+		data, err := os.ReadFile(filepath.Join(dir, "app.yml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	idle := read()
+	if !strings.Contains(idle, "app-preview:") || !strings.Contains(idle, "servers: []") {
+		t.Fatalf("idle file should keep an empty preview service:\n%s", idle)
+	}
+
+	state.Preview = []Server{{Addr: "10.0.0.2:80"}}
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	live := read()
+	previewPart := live[strings.Index(live, "app-preview:"):]
+	if !strings.Contains(previewPart, `"http://10.0.0.2:80"`) || strings.Contains(previewPart, "10.0.0.1") {
+		t.Fatalf("preview service should hold only green:\n%s", live)
+	}
+	if !strings.Contains(live[:strings.Index(live, "app-preview:")], "10.0.0.1") {
+		t.Fatalf("main service lost blue:\n%s", live)
+	}
+}
+
+func TestTraefikFileWithoutPreviewHostIsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	state := &UpstreamState{Service: "app", Servers: []Server{{Addr: "10.0.0.1:80"}}, Preview: []Server{{Addr: "10.0.0.2:80"}}}
+	if err := NewTraefik(dir).GenerateConfig(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "app.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != renderTraefikYAML(&UpstreamState{Service: "app", Servers: state.Servers}) {
+		t.Fatalf("file changed without a preview host:\n%s", data)
 	}
 }

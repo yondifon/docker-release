@@ -34,6 +34,7 @@ func NewFactory(dockerClient *docker.Client, project string) *Factory {
 func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 	route := NginxRoute{
 		Host:        cfg.RouteHost,
+		PreviewHost: cfg.PreviewHost,
 		Path:        cfg.RoutePath,
 		SSLCert:     cfg.TLSCert,
 		SSLKey:      cfg.TLSKey,
@@ -46,18 +47,23 @@ func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 		if cfg.AngieRouteDir != "" {
 			return NewAngieRoutes(cfg.AngieConfigDir, cfg.AngieRouteDir, route, f.docker, cfg.AngieService, f.project), nil
 		}
-		return NewAngie(cfg.AngieConfigDir, f.docker, cfg.AngieService, f.project), nil
+		p := NewAngie(cfg.AngieConfigDir, f.docker, cfg.AngieService, f.project)
+		p.previewHost = cfg.PreviewHost
+		return p, nil
 	case config.ProviderTraefik:
 		if bundledProxy("traefik") {
 			return NewTraefikRoutes(cfg.TraefikConfigDir, route), nil
 		}
-		return NewTraefik(cfg.TraefikConfigDir), nil
+		p := NewTraefik(cfg.TraefikConfigDir)
+		p.route.PreviewHost = cfg.PreviewHost
+		return p, nil
 	case config.ProviderNginxProxy:
 		return f.nginxProxyProvider(cfg)
 	case config.ProviderCaddy:
 		if bundledProxy("caddy") {
 			return NewCaddyRoutes(cfg.CaddyConfigDir, CaddyRoute{
 				Host:        cfg.RouteHost,
+				PreviewHost: cfg.PreviewHost,
 				Path:        cfg.RoutePath,
 				TLSCert:     cfg.TLSCert,
 				TLSKey:      cfg.TLSKey,
@@ -66,11 +72,14 @@ func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 				Affinity:    cfg.Affinity,
 			}, f.docker, cfg.CaddyService, f.project), nil
 		}
-		return NewCaddy(cfg.CaddyConfigDir, f.docker, cfg.CaddyService, f.project), nil
+		p := NewCaddy(cfg.CaddyConfigDir, f.docker, cfg.CaddyService, f.project)
+		p.route.PreviewHost = cfg.PreviewHost
+		return p, nil
 	case config.ProviderHAProxy:
 		if bundledProxy("haproxy") {
 			return NewHAProxyRoutes(cfg.HAProxyConfigDir, HAProxyRoute{
 				Host:        cfg.RouteHost,
+				PreviewHost: cfg.PreviewHost,
 				Path:        cfg.RoutePath,
 				TLSCert:     cfg.TLSCert,
 				TLSKey:      cfg.TLSKey,
@@ -78,7 +87,9 @@ func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 				Affinity:    cfg.Affinity,
 			}, f.docker, cfg.HAProxyService, f.project), nil
 		}
-		return NewHAProxy(cfg.HAProxyConfigDir, f.docker, cfg.HAProxyService, f.project), nil
+		p := NewHAProxy(cfg.HAProxyConfigDir, f.docker, cfg.HAProxyService, f.project)
+		p.route.PreviewHost = cfg.PreviewHost
+		return p, nil
 	case config.ProviderNone:
 		return NewNoop(), nil
 	default:

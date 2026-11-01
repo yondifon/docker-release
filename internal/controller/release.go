@@ -151,6 +151,9 @@ func (c *Controller) release(ctx context.Context, project, service string, force
 		if err != nil {
 			return fmt.Errorf("parsing labels: %w", err)
 		}
+		if err := checkPreviewHost(key, cfg, containers); err != nil {
+			return err
+		}
 
 		c.resolveNginxProxyUpstream(ctx, cfg, newContainers)
 
@@ -164,8 +167,12 @@ func (c *Controller) release(ctx context.Context, project, service string, force
 		return nil
 	}
 
-	if _, err := config.ParseLabels(serviceContainers[0].Labels); err != nil {
+	cfg, err := config.ParseLabels(serviceContainers[0].Labels)
+	if err != nil {
 		return fmt.Errorf("parsing labels: %w", err)
+	}
+	if err := checkPreviewHost(key, cfg, containers); err != nil {
+		return err
 	}
 
 	newContainers, cfg, err := c.scaleUp(ctx, key, serviceContainers, resolvedProject)

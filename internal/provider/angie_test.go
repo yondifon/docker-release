@@ -243,3 +243,57 @@ func TestAngieRenderUpstreamStickyLearn(t *testing.T) {
 		t.Error("should not use sticky cookie when learn name is set")
 	}
 }
+
+func TestAngieUpstreamOnlyKeepsPreviewUpstreamLoadable(t *testing.T) {
+	dir := t.TempDir()
+	p := NewAngie(dir, nil, "", "")
+	p.previewHost = "next.example.com"
+	state := &UpstreamState{
+		Service: "app", Affinity: "cookie",
+		Servers: []Server{{Addr: "10.0.0.1:80"}},
+	}
+	read := func() string {
+		t.Helper()
+		if err := p.GenerateConfig(context.Background(), state); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "app.conf"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	got := read()
+	if !strings.Contains(got, "upstream app_preview_upstream {") || !strings.Contains(got, "server 127.0.0.1:1 down;") {
+		t.Fatalf("no preview upstream while preview is idle: %s", got)
+	}
+
+	state.Preview = []Server{{Addr: "10.0.0.2:80"}}
+	got = read()
+	if !strings.Contains(got, "server 10.0.0.2:80;") || strings.Count(got, "sticky cookie") != 2 {
+		t.Fatalf("live preview upstream wrong: %s", got)
+	}
+	// The two upstreams must not share a sticky cookie, or switching hosts would pin users.
+	cookies := map[string]bool{}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "sticky cookie") {
+			cookies[strings.TrimSpace(line)] = true
+		}
+	}
+	if len(cookies) != 2 {
+		t.Fatalf("main and preview share a sticky cookie: %s", got)
+	}
+}
+
+func TestAngieUpstreamOnlyWithoutPreviewHostIsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	state := &UpstreamState{Service: "app", Servers: []Server{{Addr: "10.0.0.1:80"}}, Preview: []Server{{Addr: "10.0.0.2:80"}}}
+	if err := NewAngie(dir, nil, "", "").GenerateConfig(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "app.conf"))
+	if string(data) != renderAngieUpstream(state) {
+		t.Fatalf("output changed without a preview host: %s", data)
+	}
+}

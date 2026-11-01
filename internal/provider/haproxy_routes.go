@@ -18,14 +18,19 @@ import (
 )
 
 type HAProxyRoute struct {
-	Host        string
-	Path        string
-	TLSCert     string
-	TLSKey      string
-	TLSRedirect bool
-	Backend     string
-	Affinity    string
-	TLSHash     string
+	Host string
+	// PreviewHost answers with the servers in `UpstreamState.Preview`. The saved
+	// `.route` file keeps it only while the preview is live, along with the
+	// `PreviewBackend` it points at.
+	PreviewHost    string `json:",omitempty"`
+	PreviewBackend string `json:",omitempty"`
+	Path           string
+	TLSCert        string
+	TLSKey         string
+	TLSRedirect    bool
+	Backend        string
+	Affinity       string
+	TLSHash        string
 }
 
 func NewHAProxyRoutes(configDir string, route HAProxyRoute, dockerClient *docker.Client, serviceName, project string) *HAProxyProvider {
@@ -38,6 +43,12 @@ func NewHAProxyRoutes(configDir string, route HAProxyRoute, dockerClient *docker
 func (p *HAProxyProvider) generateBundledConfig(state *UpstreamState) error {
 	route := p.route
 	route.Backend = state.ResolveUpstreamName() + "_be"
+	preview := route.PreviewHost != "" && len(state.Preview) > 0
+	route.PreviewHost = ""
+	if preview {
+		route.PreviewHost = p.route.PreviewHost
+		route.PreviewBackend = state.previewState().ResolveUpstreamName() + "_be"
+	}
 	if route.TLSCert != "" {
 		cert, err := os.ReadFile(route.TLSCert)
 		if err != nil {
@@ -59,6 +70,12 @@ func (p *HAProxyProvider) generateBundledConfig(state *UpstreamState) error {
 	if route.Path != "" && route.Path != "/" {
 		prefix := regexp.QuoteMeta(strings.TrimSuffix(route.Path, "/"))
 		conf += fmt.Sprintf("    http-request replace-path ^%s/?(.*)$ /\\1\n", prefix)
+	}
+	if preview {
+		// The preview host always serves `/`, so this backend has no path rewrite.
+		previewBackend := *state.previewState()
+		previewBackend.Affinity = route.Affinity
+		conf += "\n" + strings.TrimPrefix(renderHAProxyBundledBackend(&previewBackend), haproxyHeader)
 	}
 	p.pending = map[string][]byte{
 		filepath.Join(p.configDir, state.Service+".cfg"):   []byte(conf),
@@ -158,6 +175,10 @@ func (p *HAProxyProvider) bundledRoutes(changes map[string][]byte) ([]HAProxyRou
 		var route HAProxyRoute
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(string(data), generatedHeader)), &route); err != nil {
 			return nil, fmt.Errorf("reading HAProxy route %s: %w", path, err)
+		}
+		if route.PreviewHost != "" && route.PreviewBackend != "" {
+			// Same certificate as the main host, so the preview route loads none.
+			routes = append(routes, HAProxyRoute{Host: route.PreviewHost, Backend: route.PreviewBackend, TLSRedirect: route.TLSRedirect})
 		}
 		if route.Host != "" || route.Path != "" {
 			routes = append(routes, route)

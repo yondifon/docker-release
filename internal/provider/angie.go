@@ -14,6 +14,7 @@ type AngieProvider struct {
 	docker      *docker.Client
 	serviceName string
 	project     string
+	previewHost string // set when the service has a preview host; the upstream file then always holds a `_preview` upstream
 }
 
 func NewAngie(configDir string, dockerClient *docker.Client, serviceName, project string) *AngieProvider {
@@ -37,7 +38,7 @@ func (p *AngieProvider) GenerateConfig(ctx context.Context, state *UpstreamState
 		return err
 	}
 
-	return writeConfigFile(filepath.Join(p.configDir, state.Service+".conf"), []byte(renderAngieUpstream(state)), "config")
+	return writeConfigFile(filepath.Join(p.configDir, state.Service+".conf"), []byte(renderUpstreamFile("angie", state, p.previewHost)), "config")
 }
 
 func (p *AngieProvider) Reload(ctx context.Context) error {

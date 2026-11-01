@@ -27,6 +27,10 @@ func (r checkRunner) RunCheck(ctx context.Context, target strategy.ContainerInfo
 		"RELEASE_HOST=" + firstHost(r.cfg.RouteHost),
 	}
 
+	if r.cfg.PreviewHost != "" {
+		env = append(env, "RELEASE_PREVIEW_URL="+previewURL(r.cfg))
+	}
+
 	var result docker.CommandResult
 	var err error
 	if check.Service == "" {
@@ -45,4 +49,13 @@ func (r checkRunner) RunCheck(ctx context.Context, target strategy.ContainerInfo
 func firstHost(hosts string) string {
 	first, _, _ := strings.Cut(hosts, ",")
 	return strings.TrimSpace(first)
+}
+
+// previewURL is the address of the preview host: https when the service has a
+// certificate, http otherwise.
+func previewURL(cfg *config.ServiceConfig) string {
+	if cfg.TLSCert != "" {
+		return "https://" + cfg.PreviewHost
+	}
+	return "http://" + cfg.PreviewHost
 }
