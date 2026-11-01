@@ -4,6 +4,8 @@ Run one `docker-release` instance as shared infra for all projects on a server. 
 
 This is the right setup when you already run shared infra — an nginx-proxy, a database, a shared network — and want deployments managed from the same place.
 
+For one project, use a [bundled image](bundled-images.md) instead: it is simpler, and the [quick start](../README.md#quick-start) gets it running. A bundle manages only its own Compose project. Global mode needs the controller-only image, `malico/docker-release`, with nginx-proxy.
+
 ## How It Works
 
 By default, `docker-release` locks to the Compose project it starts in and only manages services in that project.
@@ -159,4 +161,4 @@ Global mode supports `nginx-proxy` and `none` (workers).
 
 `nginx-proxy` is the natural fit: it routes by `VIRTUAL_HOST`, which is already unique per hostname, so no per-project namespacing is needed. The infra stack example above uses it for this reason.
 
-The file-based providers (`nginx`, `angie`, `caddy`, `haproxy`, `traefik`) are **not** supported in global mode. Each derives its config filename and upstream name from the bare service name, so two projects with the same service name would collide. The controller logs an error and skips these providers when running with `DR_ALL_PROJECTS=true`. Use a dedicated per-project `docker-release` instance for them instead.
+The file-based providers (`nginx`, `angie`, `caddy`, `haproxy`, `traefik`) are **not** supported in global mode. Each derives its config filename and upstream name from the bare service name, so two projects with the same service name would collide. The controller logs an error and skips these providers when running with `DR_ALL_PROJECTS=true`. Use a [bundled image](bundled-images.md) in each project instead, or a dedicated per-project `docker-release` instance with your own proxy.
