@@ -27,7 +27,8 @@ func (p *TraefikProvider) GenerateConfig(ctx context.Context, state *UpstreamSta
 		return p.generateRoutes(state)
 	}
 
-	return writeConfigFile(filepath.Join(p.configDir, state.Service+".yml"), []byte(renderTraefikYAML(state)), "config")
+	yaml := renderTraefikYAMLWithPreview(state, p.route.PreviewHost != "")
+	return writeConfigFile(filepath.Join(p.configDir, state.Service+".yml"), []byte(yaml), "config")
 }
 
 func (p *TraefikProvider) Reload(ctx context.Context) error {
@@ -38,6 +39,13 @@ func (p *TraefikProvider) Reload(ctx context.Context) error {
 }
 
 func renderTraefikYAML(state *UpstreamState) string {
+	return renderTraefikYAMLWithPreview(state, false)
+}
+
+// renderTraefikYAMLWithPreview adds the `<service>-preview` service when a
+// preview host is set. It is there even with no preview servers, so a router
+// that points at it keeps working between releases.
+func renderTraefikYAMLWithPreview(state *UpstreamState, withPreview bool) string {
 	var b strings.Builder
 
 	b.WriteString(generatedHeader)
@@ -48,8 +56,30 @@ func renderTraefikYAML(state *UpstreamState) string {
 	} else {
 		renderLoadBalancerService(&b, state)
 	}
+	if withPreview {
+		renderPreviewService(&b, state)
+	}
 
 	return b.String()
+}
+
+func renderPreviewService(b *strings.Builder, state *UpstreamState) {
+	fmt.Fprintf(b, "    %s-preview:\n", state.Service)
+	b.WriteString("      loadBalancer:\n")
+	var urls []string
+	for _, s := range state.Preview {
+		if !s.Down && !s.Backup {
+			urls = append(urls, s.Addr)
+		}
+	}
+	if len(urls) == 0 {
+		b.WriteString("        servers: []\n")
+		return
+	}
+	b.WriteString("        servers:\n")
+	for _, addr := range urls {
+		fmt.Fprintf(b, "          - url: \"http://%s\"\n", addr)
+	}
 }
 
 func hasWeightedServers(state *UpstreamState) bool {

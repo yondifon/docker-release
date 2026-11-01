@@ -65,6 +65,23 @@ type UpstreamState struct {
 	// ip: nginx/angie/nginx-proxy→ip_hash, traefik→hrw, caddy→ip_hash, haproxy→source
 	Keepalive       int    // 0 disables keepalive
 	StickyLearnName string // angie only: if set, use sticky learn with this app cookie name
+
+	// Preview lists the servers that answer on the preview host while a blue/green
+	// release is being tried. Empty means the preview host serves nothing.
+	Preview []Server
+}
+
+// previewState is the preview servers as an upstream of their own, named
+// `<upstream>_preview`.
+func (u *UpstreamState) previewState() *UpstreamState {
+	return &UpstreamState{
+		Service:         u.Service,
+		UpstreamName:    u.ResolveUpstreamName() + "_preview",
+		Servers:         u.Preview,
+		Affinity:        u.Affinity,
+		Keepalive:       u.Keepalive,
+		StickyLearnName: u.StickyLearnName,
+	}
 }
 
 func (u *UpstreamState) ResolveUpstreamName() string {

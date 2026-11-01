@@ -2,7 +2,13 @@ package provider
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -101,5 +107,189 @@ func TestTraefikRejectedCertificatePreservesRoutes(t *testing.T) {
 	got, err := os.ReadFile(path)
 	if err != nil || string(got) != string(previous) {
 		t.Fatalf("working routes changed: %q, %v", got, err)
+	}
+}
+
+func readTraefikFile(t *testing.T, dir string) map[string]map[string]map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "app.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		HTTP map[string]map[string]map[string]any `json:"http"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(string(data), generatedHeader)), &config); err != nil {
+		t.Fatal(err)
+	}
+	return config.HTTP
+}
+
+func writePending(t *testing.T, p *TraefikProvider) {
+	t.Helper()
+	for path, data := range p.pending {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func previewTestCert(t *testing.T, dir string) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), NotAfter: time.Now().Add(time.Hour), DNSNames: []string{"app.example.com", "next.app.example.com"}}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "cert.pem")
+	pemData := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})...)
+	if err := os.WriteFile(path, pemData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func routerNames(http map[string]map[string]map[string]any) []string {
+	var names []string
+	for name := range http["routers"] {
+		names = append(names, name)
+	}
+	return names
+}
+
+func serviceURLs(t *testing.T, service map[string]any) []string {
+	t.Helper()
+	balancer, _ := service["loadBalancer"].(map[string]any)
+	servers, _ := balancer["servers"].([]any)
+	var urls []string
+	for _, s := range servers {
+		urls = append(urls, s.(map[string]any)["url"].(string))
+	}
+	return urls
+}
+
+func TestTraefikPreviewRoutesFollowPreviewServers(t *testing.T) {
+	dir := t.TempDir()
+	cert := previewTestCert(t, dir)
+	p := NewTraefikRoutes(dir, NginxRoute{
+		Host: "app.example.com", PreviewHost: "next.app.example.com",
+		SSLCert: cert, SSLKey: cert, SSLRedirect: true,
+	})
+	blue := []Server{{Addr: "10.0.0.1:80"}}
+	green := []Server{{Addr: "10.0.0.2:80"}}
+	state := func(preview []Server) *UpstreamState {
+		return &UpstreamState{Service: "app", Servers: blue, Preview: preview}
+	}
+
+	if err := p.GenerateConfig(context.Background(), state(nil)); err != nil {
+		t.Fatal(err)
+	}
+	writePending(t, p)
+	before := readTraefikFile(t, dir)
+
+	if err := p.GenerateConfig(context.Background(), state(green)); err != nil {
+		t.Fatal(err)
+	}
+	writePending(t, p)
+	live := readTraefikFile(t, dir)
+
+	var previewService string
+	for name, service := range live["services"] {
+		if strings.HasSuffix(name, "-preview") {
+			previewService = name
+			if got := serviceURLs(t, service); len(got) != 1 || got[0] != "http://10.0.0.2:80" {
+				t.Fatalf("preview service should hold only green, got %v", got)
+			}
+		}
+	}
+	if previewService == "" {
+		t.Fatalf("no preview service in %v", live["services"])
+	}
+	var http, https, redirected bool
+	for name, router := range live["routers"] {
+		if !strings.Contains(name, "-preview-") {
+			continue
+		}
+		if router["rule"] != "Host(`next.app.example.com`)" {
+			t.Errorf("preview router %s has rule %v", name, router["rule"])
+		}
+		switch {
+		case strings.HasSuffix(name, "-http"):
+			http = true
+			redirected = router["service"] == previewService+"-redirect"
+		case strings.HasSuffix(name, "-https"):
+			https = router["service"] == previewService && router["tls"] != nil
+		}
+		if router["priority"] == nil {
+			t.Errorf("preview router %s has no priority", name)
+		}
+	}
+	if !http || !https || !redirected {
+		t.Fatalf("preview routers incomplete (http %v, https %v, redirect %v): %v", http, https, redirected, live["routers"])
+	}
+	if len(live["routers"]) != len(before["routers"])+2 {
+		t.Fatalf("main routers changed: before %v, live %v", routerNames(before), routerNames(live))
+	}
+
+	if err := p.GenerateConfig(context.Background(), state(nil)); err != nil {
+		t.Fatal(err)
+	}
+	writePending(t, p)
+	after := readTraefikFile(t, dir)
+	for name := range after["routers"] {
+		if strings.Contains(name, "-preview") {
+			t.Fatalf("preview router %s stayed after the preview ended", name)
+		}
+	}
+	for name := range after["services"] {
+		if strings.Contains(name, "-preview") {
+			t.Fatalf("preview service %s stayed after the preview ended", name)
+		}
+	}
+	for name := range live["routers"] {
+		if _, ok := after["routers"][name]; ok {
+			t.Fatalf("router %s kept its name; an old API snapshot could confirm the new config", name)
+		}
+	}
+}
+
+func TestTraefikPreviewWithoutMainRouteStillRoutes(t *testing.T) {
+	dir := t.TempDir()
+	p := NewTraefikRoutes(dir, NginxRoute{PreviewHost: "next.example.com"})
+	state := &UpstreamState{Service: "app", Servers: []Server{{Addr: "10.0.0.1:80"}}, Preview: []Server{{Addr: "10.0.0.2:80"}}}
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	writePending(t, p)
+	got := readTraefikFile(t, dir)
+	if len(got["routers"]) != 1 {
+		t.Fatalf("want only the preview http router, got %v", routerNames(got))
+	}
+}
+
+func TestTraefikPreviewHostIsIgnoredWithoutPreviewServers(t *testing.T) {
+	state := &UpstreamState{Service: "app", Servers: []Server{{Addr: "10.0.0.1:80"}}}
+	plain := NewTraefikRoutes(t.TempDir(), NginxRoute{Host: "app.example.com"})
+	withHost := NewTraefikRoutes(t.TempDir(), NginxRoute{Host: "app.example.com", PreviewHost: "next.app.example.com"})
+	for _, p := range []*TraefikProvider{plain, withHost} {
+		if err := p.GenerateConfig(context.Background(), state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []*TraefikProvider{plain, withHost} {
+		writePending(t, p)
+	}
+	a, b := readTraefikFile(t, plain.configDir), readTraefikFile(t, withHost.configDir)
+	if len(a["routers"]) != len(b["routers"]) || len(a["services"]) != len(b["services"]) {
+		t.Fatalf("preview host changed the routes without preview servers: %v vs %v", a, b)
 	}
 }

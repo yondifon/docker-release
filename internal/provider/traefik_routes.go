@@ -42,13 +42,21 @@ func (p *TraefikProvider) generateRoutes(state *UpstreamState) error {
 		routeData = append(routeData, cert...)
 		routeData = append(routeData, key...)
 	}
-	// Names include the complete config so an older API snapshot cannot confirm it.
-	revision := sha256.Sum256(append([]byte(renderTraefikYAML(state)), routeData...))
+	previewLive := p.route.PreviewHost != "" && len(state.Preview) > 0
+	if previewLive {
+		routeData = append(routeData, "\npreview-live"...)
+	}
+	// Names include the complete config, preview servers too, so an older API
+	// snapshot cannot confirm it.
+	revision := sha256.Sum256(append([]byte(renderTraefikYAMLWithPreview(state, p.route.PreviewHost != "")), routeData...))
 	name := fmt.Sprintf("dr-%s-%x", state.Service, revision[:12])
 	httpConfig := traefikHTTPConfig{"services": traefikServices(name, state)}
 	config := map[string]any{"http": httpConfig}
 	if p.route.Host != "" || p.route.Path != "" {
 		p.addRouters(httpConfig, name)
+	}
+	if previewLive {
+		p.addPreviewRouters(httpConfig, name, state)
 	}
 	if p.route.SSLCert != "" {
 		config["tls"] = map[string]any{"certificates": []any{map[string]string{
@@ -173,6 +181,36 @@ func (p *TraefikProvider) addRouters(config traefikHTTPConfig, name string) {
 	config["routers"] = routers
 	if len(middlewares) > 0 {
 		config["middlewares"] = middlewares
+	}
+}
+
+// previewPriority puts the preview host above every other route, so a wildcard or
+// path-only main route cannot answer for it.
+const previewPriority = 1_000_000
+
+// addPreviewRouters adds a service and routers that send the preview host to the
+// preview servers. It runs after `addRouters` and adds to the routers it made.
+func (p *TraefikProvider) addPreviewRouters(config traefikHTTPConfig, name string, state *UpstreamState) {
+	service := name + "-preview"
+	config["services"][service] = traefikLoadBalancer(state.Preview, "", "")
+	rule := fmt.Sprintf("Host(`%s`)", p.route.PreviewHost)
+	routers := config["routers"]
+	if routers == nil {
+		routers = map[string]any{}
+		config["routers"] = routers
+	}
+	httpRouter := map[string]any{"entryPoints": []string{"web"}, "rule": rule, "service": service, "priority": previewPriority}
+	routers[service+"-http"] = httpRouter
+	if p.route.SSLCert == "" {
+		return
+	}
+	routers[service+"-https"] = map[string]any{
+		"entryPoints": []string{"websecure"}, "rule": rule, "service": service,
+		"priority": previewPriority, "tls": map[string]any{},
+	}
+	if p.route.SSLRedirect {
+		config["services"][service+"-redirect"] = traefikLoadBalancer([]Server{{Addr: "127.0.0.1:8082"}}, "", "")
+		httpRouter["service"] = service + "-redirect"
 	}
 }
 

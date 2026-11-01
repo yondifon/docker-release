@@ -23,6 +23,7 @@ type NginxProvider struct {
 
 type NginxRoute struct {
 	Host        string
+	PreviewHost string `json:",omitempty"` // answers with the servers in `UpstreamState.Preview`
 	Path        string
 	SSLCert     string
 	SSLKey      string
@@ -47,12 +48,8 @@ func (p *NginxProvider) GenerateConfig(ctx context.Context, state *UpstreamState
 	}
 
 	// Keep candidates off disk until the lock covers validation and reload.
-	upstream := renderUpstream(state)
-	if p.proxyName == "angie" {
-		upstream = renderAngieUpstream(state)
-	}
 	p.pending = map[string][]byte{
-		filepath.Join(p.configDir, state.Service+".conf"): []byte(upstream),
+		filepath.Join(p.configDir, state.Service+".conf"): []byte(renderUpstreamFile(p.proxyName, state, p.route.PreviewHost)),
 	}
 	if p.routeDir == "" {
 		return nil
@@ -61,12 +58,50 @@ func (p *NginxProvider) GenerateConfig(ctx context.Context, state *UpstreamState
 	locationPath := filepath.Join(p.routeDir, state.Service+".location")
 	p.pending[serverPath] = nil
 	p.pending[locationPath] = nil
+	var server string
 	if p.route.Host != "" {
-		p.pending[serverPath] = []byte(renderNginxServer(state, p.route, p.proxyName))
+		server = renderNginxServer(state, p.route, p.proxyName)
 	} else if p.route.Path != "" {
 		p.pending[locationPath] = []byte(renderNginxLocation(state, p.route, p.proxyName))
 	}
+	if p.route.Host != "" || p.route.Path != "" {
+		server += renderNginxPreviewServer(state, p.route, p.proxyName, server != "")
+	}
+	if server != "" {
+		p.pending[serverPath] = []byte(server)
+	}
 	return nil
+}
+
+// renderUpstreamFile is the upstream file for a service. With a preview host it
+// always ends with the `_preview_upstream` block, so a proxy rule written by hand
+// for the preview host loads even while no preview is live.
+func renderUpstreamFile(proxyName string, state *UpstreamState, previewHost string) string {
+	render := renderUpstream
+	if proxyName == "angie" {
+		render = renderAngieUpstream
+	}
+	out := render(state)
+	if previewHost != "" {
+		out += "\n" + render(state.previewState())
+	}
+	return out
+}
+
+// renderNginxPreviewServer is the server block for the preview host: the same TLS
+// settings as the main route, path `/`, and the preview servers as upstream. It is
+// empty while no preview is live. `afterMain` adds a blank line after the main block.
+func renderNginxPreviewServer(state *UpstreamState, route NginxRoute, proxyName string, afterMain bool) string {
+	if route.PreviewHost == "" || len(state.Preview) == 0 {
+		return ""
+	}
+	route.Host = route.PreviewHost
+	route.Path = ""
+	out := renderNginxServer(state.previewState(), route, proxyName)
+	if afterMain {
+		out = "\n" + out
+	}
+	return out
 }
 
 func (p *NginxProvider) Reload(ctx context.Context) error {
