@@ -113,7 +113,7 @@ _dr_find_selected_controller() {
 }
 
 _dr_compose_selection() {
-  compose_environment=$(docker compose config --environment --no-interpolate --no-env-resolution --no-consistency) || return 1
+  compose_environment=$(printf 'services: {}\n' | docker compose --project-directory "$PWD" -f - config --environment --no-consistency) || return 1
   while IFS= read -r entry; do
     case "$entry" in
       COMPOSE_FILE=*) COMPOSE_FILE=${entry#*=} ;;

@@ -247,8 +247,8 @@ func TestHostReleaseUsesComposeFileSelectedByDotEnv(t *testing.T) {
 	a := filepath.Join(dir, "compose.yml")
 	b := filepath.Join(dir, "other.yml")
 	for path, contents := range map[string]string{
-		a:                          "name: a\nservices:\n  app:\n    image: alpine:a\n",
-		b:                          "name: b\nservices:\n  app:\n    image: alpine:b\n",
+		a:                          "name: a\nservices:\n  app:\n    image: alpine:a\n    deploy:\n      replicas: ${REPLICAS:-2}\n",
+		b:                          "name: b\nservices:\n  app:\n    image: alpine:b\n    deploy:\n      replicas: ${REPLICAS:-2}\n",
 		filepath.Join(dir, ".env"): "COMPOSE_FILE=other.yml\n",
 	} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
