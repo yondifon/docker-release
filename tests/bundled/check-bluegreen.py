@@ -14,6 +14,11 @@ releases a new version of `bg_app`, and checks what users saw:
   rollback the new version fails /signup after the switch: users go back to
            the old containers and no request reaches a stopped container
   single   the same with one container, where nothing else could take over
+  preview  while the check runs, the preview host serves only the new version
+           and the main host only the old one; after the switch the preview
+           host answers 404 and the main host serves the new version
+  preview_failed
+           a failing check also takes the preview host away
 """
 import argparse
 import dataclasses
@@ -227,7 +232,80 @@ def rollback_scenario(proxy, replicas, max_gap):
         return {"requests": len(traffic.samples), "errors": len(broken), "error_seconds": round(gap, 2)}
 
 
+PREVIEW_HOST = "next.check.localhost"
+
+
+def fetch(port, host, path="/"):
+    """Returns (status, version) for one request through the proxy."""
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    try:
+        connection.request("GET", path, headers={"Host": host})
+        response = connection.getresponse()
+        found = re.search(r"version=(\w+)", response.read().decode())
+        return response.status, found.group(1) if found else ""
+    finally:
+        connection.close()
+
+
+def run_release_in_background(stack):
+    outcome = {}
+
+    def target():
+        outcome["result"], outcome["elapsed"] = stack.release()
+
+    thread = threading.Thread(target=target)
+    thread.start()
+    return thread, outcome
+
+
+def wait_for_preview(port):
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        try:
+            if fetch(port, PREVIEW_HOST)[0] == 200:
+                return
+        except OSError:
+            pass
+        time.sleep(0.25)
+    raise AssertionError("the preview host never started serving the new version")
+
+
+def preview_scenario(proxy, check_command, passes):
+    labels = {"BG_PREVIEW_HOST": PREVIEW_HOST, "BG_CHECK_COMMAND": check_command, "BG_CHECK_TIMEOUT": "60s"}
+    port = PORTS[proxy]
+    with Stack(proxy, labels) as stack:
+        old = stack.app_ids()
+        assert fetch(port, PREVIEW_HOST)[0] == 404, "the preview host must not answer before a release"
+        build_app("bad")
+        thread, outcome = run_release_in_background(stack)
+        wait_for_preview(port)
+        # The check sleeps while we look, so both hosts are watched during it.
+        during = []
+        for _ in range(20):
+            during.append((fetch(port, PREVIEW_HOST), fetch(port, HOST)))
+            time.sleep(0.1)
+        thread.join()
+        result = outcome["result"]
+        assert all(preview == (200, "bad") for preview, _ in during), during
+        assert all(main == (200, "ok") for _, main in during), during
+        after_preview = fetch(port, PREVIEW_HOST)
+        after_main = fetch(port, HOST)
+        assert after_preview[0] == 404, f"the preview host should be gone, got {after_preview}"
+        if passes:
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert after_main == (200, "bad"), f"users should be on the new version, got {after_main}"
+            assert stack.app_ids() != old
+        else:
+            assert result.returncode != 0 and "release undone" in result.stderr, result.stderr
+            assert after_main == (200, "ok"), f"users should stay on the old version, got {after_main}"
+            assert stack.app_ids() == old
+        return {"samples": len(during), "after_preview": after_preview[0], "after_main": after_main[1]}
+
+
 SCENARIOS = {
+    "preview": lambda proxy: preview_scenario(
+        proxy, 'test "$RELEASE_PREVIEW_URL" = http://next.check.localhost && sleep 8', passes=True),
+    "preview_failed": lambda proxy: preview_scenario(proxy, "sleep 8; exit 1", passes=False),
     "passing": scenario_passing,
     "failing": scenario_failing,
     "rollback": lambda proxy: rollback_scenario(proxy, replicas=2, max_gap=8),

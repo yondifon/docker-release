@@ -189,6 +189,19 @@ release.bg.soak_time: 5m
 release.bg.green_weight: 50
 ```
 
+## Preview address
+
+Set `release.preview.host` on a blue/green app to try the new version on its own host before users move; see [Preview address](../readme.md#preview-address).
+
+In the bundle, the route is added for you. The preview host uses the same certificate settings as the main host, so the certificate must also cover `next.app.example.com`.
+
+With a separate Traefik, `docker-release` also writes a service `app-preview` into the same file as `app`. It holds only the new containers during a release, and no servers the rest of the time. Add one router label pair to the app service:
+
+```yaml
+traefik.http.routers.app-preview.rule: "Host(`next.app.example.com`)"
+traefik.http.routers.app-preview.service: "app-preview@file"
+```
+
 ## Notes
 
 - `release.affinity: ip` uses sticky cookies for unweighted services and HRW (highest random weight) for weighted groups.

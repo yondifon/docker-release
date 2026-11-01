@@ -196,6 +196,27 @@ release.bg.soak_time: 5m
 release.bg.green_weight: 50
 ```
 
+## Preview address
+
+Set `release.preview.host` on a blue/green app to try the new version on its own host before users move; see [Preview address](../readme.md#preview-address).
+
+In the bundle, the route is added for you. The preview host uses the same certificate settings as the main host, so the certificate must also cover `next.app.example.com`.
+
+With a separate Nginx, `docker-release` also writes `app_preview_upstream` into the same file as `app_upstream`. During a release it holds only the new containers. The rest of the time it holds one server marked `down`, so your config still loads. Add one `server` block:
+
+```nginx
+server {
+    listen 80;
+    server_name next.app.example.com;
+
+    location / {
+        proxy_pass http://app_preview_upstream;
+    }
+}
+```
+
+If you set `release.host` and include `/shared/nginx-routes/*.server`, `docker-release` writes this block for you.
+
 ## Notes
 
 - Nginx open source does not support sticky cookies. `release.affinity: cookie` falls back to IP hashing. Use Angie if you need real cookie sticky sessions with an Nginx-compatible config format.
