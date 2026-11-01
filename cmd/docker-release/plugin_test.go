@@ -26,9 +26,12 @@ type pluginService struct {
 }
 
 type pluginFixture struct {
-	Controllers map[string]string `json:"controllers"`
-	Source      string            `json:"source"`
-	Files       string            `json:"files"`
+	Controllers     map[string]string `json:"controllers"`
+	Source          string            `json:"source"`
+	Files           string            `json:"files"`
+	EnvFiles        string            `json:"env_files"`
+	Global          bool              `json:"global"`
+	ControllerFiles map[string]string `json:"controller_files"`
 }
 
 type pluginOutcome struct {
@@ -115,6 +118,7 @@ func TestHostReleaseUsesSelectedProjectBeforeFindingController(t *testing.T) {
 	writePluginJSON(t, b, pluginModel{Name: "b", Services: map[string]pluginService{"app": {Image: "b:new"}}})
 	writePluginJSON(t, filepath.Join(dir, "fixture.json"), pluginFixture{
 		Controllers: map[string]string{"a": "controller-a", "b": "controller-b"}, Source: dir, Files: b,
+		ControllerFiles: map[string]string{"a": a, "b": b},
 	})
 	t.Setenv("COMPOSE_FILE", b)
 	result := runPlugin(t, cwd, "app")
@@ -176,6 +180,60 @@ func TestHostModelKeepsMountedBuildOnlyRelease(t *testing.T) {
 	releasePluginModel(t, model, docker.ComposeProject{Name: "mounted", WorkingDir: dir, ConfigFiles: []string{compose}})
 	if result := readPluginOutcome(t); result.Image != "mounted-app:built" {
 		t.Fatalf("mounted build-only release did not create its replacement: %+v", result)
+	}
+}
+
+func realPluginCompose(t *testing.T) string {
+	t.Helper()
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skip("Docker CLI is needed for the no-stack Compose check")
+	}
+	if out, err := exec.Command(docker, "compose", "version").CombinedOutput(); err != nil {
+		t.Skipf("Compose is needed for the no-stack check: %s", out)
+	}
+	return docker
+}
+
+func TestHostReleaseRecoversRequiredStartupEnvBeforeRendering(t *testing.T) {
+	realDocker := realPluginCompose(t)
+	dir := newPluginHarness(t)
+	t.Setenv("PLUGIN_REAL_DOCKER", realDocker)
+	t.Setenv("TAG", "")
+	if err := os.Unsetenv("TAG"); err != nil {
+		t.Fatal(err)
+	}
+	compose := filepath.Join(dir, "compose.yml")
+	envFile := filepath.Join(dir, "startup.env")
+	if err := os.WriteFile(compose, []byte("name: required-env\nservices:\n  app:\n    image: alpine:${TAG:?TAG is required}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(envFile, []byte("TAG=from-startup-env\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	writePluginJSON(t, filepath.Join(dir, "fixture.json"), pluginFixture{
+		Controllers: map[string]string{"required-env": "controller"}, Source: dir, Files: compose, EnvFiles: envFile,
+	})
+	result := runPlugin(t, dir, "-f", compose, "app")
+	if result.Project != "required-env" || result.Image != "alpine:from-startup-env" {
+		t.Fatalf("release lost the required startup env file: %+v", result)
+	}
+}
+
+func TestHostReleaseTargetsProjectStartedWithComposeProjectOverride(t *testing.T) {
+	realDocker := realPluginCompose(t)
+	dir := newPluginHarness(t)
+	t.Setenv("PLUGIN_REAL_DOCKER", realDocker)
+	compose := filepath.Join(dir, "compose.yml")
+	if err := os.WriteFile(compose, []byte("name: default\nservices:\n  app:\n    image: alpine:custom-project\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	writePluginJSON(t, filepath.Join(dir, "fixture.json"), pluginFixture{
+		Controllers: map[string]string{"custom": "custom-controller"}, Source: dir, Files: compose,
+	})
+	result := runPlugin(t, dir, "-f", compose, "app", "--project", "custom")
+	if result.Controller != "custom-controller" || result.Project != "custom" || result.Image != "alpine:custom-project" {
+		t.Fatalf("release did not reach the project started with Compose -p: %+v", result)
 	}
 }
 
@@ -246,20 +304,37 @@ func pluginDockerBoundary(dir string, args []string) error {
 	}
 	switch args[0] {
 	case "ps":
+		filters := strings.Join(args, " ")
 		for project, controller := range fixture.Controllers {
-			if strings.Contains(strings.Join(args, " "), "label=com.docker.compose.project="+project+" ") {
+			if !strings.Contains(filters, "label=com.docker.compose.project=") || strings.Contains(filters, "label=com.docker.compose.project="+project+" ") {
 				fmt.Println(controller)
 			}
 		}
 		return nil
 	case "inspect":
-		fmt.Printf("%s\n%s\n", fixture.Source, fixture.Files)
+		printPluginMetadata(fixture, args)
 		return nil
 	case "exec":
 		return pluginExecOutcome(dir, args)
 	default:
 		return pluginComposeOutcome(dir, args)
 	}
+}
+
+func printPluginMetadata(fixture pluginFixture, args []string) {
+	files := fixture.Files
+	if strings.Contains(strings.Join(args, " "), "DR_ALL_PROJECTS") {
+		for project, controller := range fixture.Controllers {
+			if controller != args[len(args)-1] {
+				continue
+			}
+			fmt.Printf("%s\n%t\n", project, fixture.Global)
+			if savedFiles := fixture.ControllerFiles[project]; savedFiles != "" {
+				files = savedFiles
+			}
+		}
+	}
+	fmt.Printf("%s\n%s\n%s\n", fixture.Source, files, fixture.EnvFiles)
 }
 
 func pluginExecCommand(args []string) (string, []string, bool) {
@@ -370,6 +445,11 @@ func loadPluginModel(files []string) (pluginModel, error) {
 }
 
 func pluginComposeOutcome(dir string, args []string) error {
+	if realDocker := os.Getenv("PLUGIN_REAL_DOCKER"); realDocker != "" {
+		cmd := exec.Command(realDocker, append([]string{"compose"}, args...)...)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		return cmd.Run()
+	}
 	command := parsePluginCompose(args)
 	model, err := loadPluginModel(command.files)
 	if err != nil {
