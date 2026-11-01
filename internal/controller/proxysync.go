@@ -4,9 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"os"
 	"path/filepath"
-	"strings"
+	"slices"
 	"time"
 
 	"github.com/malico/docker-release/internal/config"
@@ -33,8 +32,7 @@ func (c *Controller) cleanStaleProxyConfigs(ctx context.Context, configs map[str
 			c.proxyConfigs[dirs] = cfg
 		}
 	}
-	name := strings.ToLower(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")))
-	if name == "nginx" || name == "angie" || name == "caddy" || name == "haproxy" || name == "traefik" {
+	if name := config.BundledProxy(); slices.Contains([]string{"nginx", "angie", "caddy", "haproxy", "traefik"}, name) {
 		cfg, err := config.ParseLabels(map[string]string{"release.enable": "true", "release.provider": name})
 		if err != nil {
 			return err
@@ -100,14 +98,11 @@ func transactionalProxyDirs(cfg *config.ServiceConfig) (proxyConfigDirs, bool) {
 	case config.ProviderAngie:
 		return proxyConfigDirs{cfg.AngieConfigDir, cfg.AngieRouteDir}, cfg.AngieRouteDir != ""
 	case config.ProviderCaddy:
-		bundled := strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "caddy")
-		return proxyConfigDirs{cfg.CaddyConfigDir, ""}, bundled
+		return proxyConfigDirs{cfg.CaddyConfigDir, ""}, config.BundledProxy() == "caddy"
 	case config.ProviderHAProxy:
-		bundled := strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "haproxy")
-		return proxyConfigDirs{cfg.HAProxyConfigDir, ""}, bundled
+		return proxyConfigDirs{cfg.HAProxyConfigDir, ""}, config.BundledProxy() == "haproxy"
 	case config.ProviderTraefik:
-		bundled := strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "traefik")
-		return proxyConfigDirs{cfg.TraefikConfigDir, ""}, bundled
+		return proxyConfigDirs{cfg.TraefikConfigDir, ""}, config.BundledProxy() == "traefik"
 	default:
 		return proxyConfigDirs{}, false
 	}

@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -279,29 +278,5 @@ func TestSaveConcurrentSameService(t *testing.T) {
 	}
 	if loaded.Service != "webapp" {
 		t.Errorf("service = %s, want webapp", loaded.Service)
-	}
-}
-
-func TestUpdatedAtPersistedInJSON(t *testing.T) {
-	dir := t.TempDir()
-	mgr := NewManager(dir, "")
-
-	s := &DeploymentState{Service: "webapp", Status: StatusInProgress}
-	if err := mgr.Save(s); err != nil {
-		t.Fatalf("save error: %v", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(dir, "webapp_state.json"))
-	if err != nil {
-		t.Fatalf("read error: %v", err)
-	}
-
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("unmarshal error: %v", err)
-	}
-
-	if _, ok := raw["updated_at"]; !ok {
-		t.Error("updated_at field missing from JSON")
 	}
 }

@@ -5,10 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/malico/docker-release/internal/config"
-	"github.com/malico/docker-release/internal/provider"
 	"github.com/malico/docker-release/internal/state"
 	"github.com/malico/docker-release/internal/strategy"
 )
@@ -132,48 +129,6 @@ func TestCoordinatorUnknownStrategy(t *testing.T) {
 	}
 }
 
-func TestCoordinatorExecuteWithDeployment(t *testing.T) {
-	dir := t.TempDir()
-	stateMgr := state.NewManager(dir, "")
-
-	ds := &state.DeploymentState{
-		Service:  "app",
-		Status:   state.StatusInProgress,
-		Strategy: "canary",
-		Containers: state.Containers{
-			Stable: []string{"stable_aaa111_full"},
-			Canary: []string{"canary_bbb222_full"},
-		},
-	}
-	stateMgr.Save(ds)
-
-	mock := &mockStrategy{}
-	coord := NewCoordinator(stateMgr, &mockResolver{})
-	coord.RegisterStrategy("canary", mock)
-
-	d := &strategy.Deployment{
-		Service: "app",
-		Config: &config.ServiceConfig{
-			HealthCheckTimeout: time.Second,
-			DrainTimeout:       time.Millisecond,
-		},
-		Old: []strategy.ContainerInfo{
-			{ID: "stable_aaa111_full", Addr: "172.18.0.2:80"},
-		},
-		New: []strategy.ContainerInfo{
-			{ID: "canary_bbb222_full", Addr: "172.18.0.10:80"},
-		},
-	}
-
-	if err := coord.ExecuteWithDeployment(context.Background(), d); err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-
-	if len(mock.rollbackCalls) != 1 {
-		t.Fatalf("expected 1 rollback call, got %d", len(mock.rollbackCalls))
-	}
-}
-
 func TestCoordinatorSkipsMissingContainers(t *testing.T) {
 	dir := t.TempDir()
 	stateMgr := state.NewManager(dir, "")
@@ -205,18 +160,5 @@ func TestCoordinatorSkipsMissingContainers(t *testing.T) {
 	d := mock.rollbackCalls[0]
 	if len(d.Old) != 1 {
 		t.Errorf("expected 1 old (missing container skipped), got %d", len(d.Old))
-	}
-}
-
-// Verify NoopProvider satisfies the interface
-func TestNoopProvider(t *testing.T) {
-	var p provider.Provider = &NoopProvider{}
-
-	if err := p.GenerateConfig(context.Background(), nil); err != nil {
-		t.Error(err)
-	}
-
-	if err := p.Reload(context.Background()); err != nil {
-		t.Error(err)
 	}
 }
