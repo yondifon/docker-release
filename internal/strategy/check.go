@@ -20,9 +20,10 @@ type CheckResult struct {
 }
 
 // CheckRunner runs `release.check.command` against one new container. ctx ends
-// when the check's timeout does.
+// when the check's timeout does. previewToken is the live preview token, or ""
+// when the release has none.
 type CheckRunner interface {
-	RunCheck(ctx context.Context, target ContainerInfo) (CheckResult, error)
+	RunCheck(ctx context.Context, target ContainerInfo, previewToken string) (CheckResult, error)
 }
 
 // RequestSource delivers every request the proxy answers, until cancel is
@@ -46,7 +47,7 @@ func IsUndone(err error) bool {
 
 // runChecks runs the check command against each new container, one after the
 // other. It returns nil when all pass and an UndoneError reason otherwise.
-func runChecks(ctx context.Context, d *Deployment) (reason string, err error) {
+func runChecks(ctx context.Context, d *Deployment, previewToken string) (reason string, err error) {
 	check := d.Config.Check
 	if d.Checks == nil {
 		return "", fmt.Errorf("release.check.command is set but this deployment has no way to run it")
@@ -56,7 +57,7 @@ func runChecks(ctx context.Context, d *Deployment) (reason string, err error) {
 		slog.Info("running check", "component", "blue-green", "service", d.Service, "container", short)
 
 		checkCtx, cancel := context.WithTimeout(ctx, check.Timeout)
-		result, runErr := d.Checks.RunCheck(checkCtx, target)
+		result, runErr := d.Checks.RunCheck(checkCtx, target, previewToken)
 		cancel()
 
 		switch {

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/malico/docker-release/internal/config"
 	"github.com/malico/docker-release/internal/state"
 )
 
@@ -39,6 +40,13 @@ func (c *Controller) Status(ctx context.Context, project, service string) error 
 	fmt.Printf("Weight:     %d%%\n", s.CurrentWeight)
 	fmt.Printf("Stable:     %v\n", s.Containers.Stable)
 	fmt.Printf("Canary:     %v\n", s.Containers.Canary)
+	if s.Status == state.StatusInProgress && s.PreviewToken != "" {
+		if link := s.PreviewLink(); link != "" {
+			fmt.Printf("Preview:    %s\n", link)
+		} else {
+			fmt.Printf("Preview:    send the header %s: %s\n", config.PreviewHeader, s.PreviewToken)
+		}
+	}
 	if s.Failure != "" {
 		fmt.Printf("Last release failed:\n%s\n", s.Failure)
 	}

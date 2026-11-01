@@ -18,7 +18,7 @@ type fakeChecks struct {
 	err     error
 }
 
-func (f *fakeChecks) RunCheck(_ context.Context, target ContainerInfo) (CheckResult, error) {
+func (f *fakeChecks) RunCheck(_ context.Context, target ContainerInfo, _ string) (CheckResult, error) {
 	f.targets = append(f.targets, target.Addr)
 	return f.result, f.err
 }

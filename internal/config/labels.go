@@ -51,6 +51,7 @@ type ServiceConfig struct {
 	NginxRouteDir        string
 	RouteHost            string
 	PreviewHost          string
+	PreviewToken         string // "auto", or the fixed token from `release.preview.token`
 	RoutePath            string
 	TLSCert              string
 	TLSKey               string
@@ -111,6 +112,7 @@ func ParseLabels(labels map[string]string) (*ServiceConfig, error) {
 		NginxRouteDir:        getOr(labels, "release.nginx.route_dir", ""),
 		RouteHost:            routeLabel(labels, "host", "host"),
 		PreviewHost:          strings.TrimSpace(labels["release.preview.host"]),
+		PreviewToken:         strings.TrimSpace(labels["release.preview.token"]),
 		RoutePath:            routeLabel(labels, "path", "path"),
 		TLSCert:              routeLabel(labels, "tls.cert", "ssl.cert"),
 		TLSKey:               routeLabel(labels, "tls.key", "ssl.key"),
@@ -245,6 +247,9 @@ func (c *ServiceConfig) validate() error {
 	}
 
 	if err := c.validatePreviewHost(); err != nil {
+		return err
+	}
+	if err := c.validatePreviewToken(); err != nil {
 		return err
 	}
 

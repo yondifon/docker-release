@@ -15,6 +15,9 @@ import (
 type CaddyRoute struct {
 	Host        string
 	PreviewHost string // answers with the servers in `UpstreamState.Preview`
+	// PreviewLink is set when `release.preview.token` is set. The route then sends
+	// requests that carry `UpstreamState.PreviewToken` to `UpstreamState.Preview`.
+	PreviewLink bool
 	Path        string
 	TLSCert     string
 	TLSKey      string
