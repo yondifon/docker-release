@@ -47,13 +47,13 @@ docker compose up -d
 docker release app
 ```
 
-Without the CLI, run `docker compose exec docker-release dr release app`.
+Without the CLI, run `docker compose exec docker-release dr release app`; without readable project files, this copies running containers and does not apply Compose file changes.
 
 Open `http://app.localhost/`. Browsers send `*.localhost` to your own machine. If port 80 is taken, change the first number in `"80:80"` and use that port in the address. On a server, set `release.host` to your domain and point its DNS at the server.
 
 - Your app needs a Docker health check. A new container gets traffic only after it is healthy.
 - Requests go to your app's lowest exposed port, or port 80 if it exposes none. Do not publish the app's ports.
-- The host command applies Compose file changes without a project mount. [Project file access](docs/bundled-images.md#project-mount).
+- For prebuilt images, the host command applies Compose file changes without a project mount. [File access exceptions](docs/bundled-images.md#project-mount).
 - The state volume keeps rollback history when you recreate the service.
 - In production, pin a version such as `:0.2.0` instead of `latest`.
 
