@@ -20,10 +20,8 @@ services:
     image: malico/docker-release-nginx:latest
     ports:
       - "80:80"
-    stop_grace_period: 90s
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - docker-release-state:/var/lib/docker-release
 
   app:
     image: your-registry/app:latest
@@ -35,9 +33,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-
-volumes:
-  docker-release-state:
 ```
 
 Start it, [install the CLI](#install-cli), and deploy:
@@ -54,7 +49,7 @@ Open `http://app.localhost/`. Browsers send `*.localhost` to your own machine. I
 - Your app needs a Docker health check. A new container gets traffic only after it is healthy.
 - Requests go to your app's lowest exposed port, or port 80 if it exposes none. Do not publish the app's ports.
 - For prebuilt images, the host command applies Compose file changes without a project mount. [File access exceptions](docs/bundled-images.md#project-mount).
-- The state volume keeps rollback history when you recreate the service.
+- Rollback history survives restarts and upgrades of the service. To keep it through `docker compose down` as well, and to keep Caddy certificates, [add a named volume](docs/bundled-images.md#keep-state).
 - In production, pin a version such as `:0.2.0` instead of `latest`.
 
 Labels, TLS, and the other options: [Bundled proxy images](docs/bundled-images.md).

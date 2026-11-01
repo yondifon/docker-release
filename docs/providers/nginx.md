@@ -207,4 +207,4 @@ release.bg.green_weight: 50
 |---|---|
 | Nginx ignores upstream files | Check `include /etc/nginx/conf.d/custom/*.conf;` is in your config |
 | Reload does not run | Set `release.nginx.service` to your Nginx Compose service name |
-| Rollback state lost on restart | Mount `/var/lib/docker-release` to a named volume |
+| Rollback state lost after `docker compose down` | Mount `/var/lib/docker-release` to a named volume |

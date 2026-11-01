@@ -210,4 +210,4 @@ release.bg.green_weight: 50
 | Reload fails | Run HAProxy with `-W` in the command |
 | Backend file not loaded | Pass `/etc/haproxy/conf.d` as a second `-f` arg in the command |
 | App receives the wrong path | Add a path-strip rule in `haproxy.cfg` |
-| Rollback state lost on restart | Mount `/var/lib/docker-release` to a named volume |
+| Rollback state lost after `docker compose down` | Mount `/var/lib/docker-release` to a named volume |

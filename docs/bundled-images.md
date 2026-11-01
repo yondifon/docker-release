@@ -20,13 +20,35 @@ The [quick start](../README.md#quick-start) has the complete Compose file. To us
 
 Run `docker compose up -d`. Point the hostname at your server. The bundle and apps must share a Docker network, which Compose gives them by default. Requests go to your app's lowest exposed port, or port 80 if none is exposed. Expose only its HTTP port. Do not publish app ports just for routing.
 
-The Docker socket lets docker-release manage containers and grants control of the Docker host. Use bundles only with trusted services. The state volume keeps rollback history when you recreate the bundle. In Caddy, it also keeps certificates and the local certificate authority. Keep this volume when upgrading. Generated proxy files stay inside the bundle and are recreated from app labels.
+The Docker socket lets docker-release manage containers and grants control of the Docker host. Use bundles only with trusted services. Generated proxy files stay inside the bundle and are recreated from app labels.
 
 No environment variables, `release.provider` label, proxy service name, or health check override is needed. The image supplies its own health check. It becomes healthy when routing is ready and the proxy accepts HTTP requests.
 
 Deploy with `docker release app` from the [host command](../README.md#install-cli). Keep a health check that proves each app can serve requests.
 
 Caddy, HAProxy, and Traefik app releases keep existing client connections open. Changes to hostnames, routes, or TLS settings can close idle connections; apply those changes during a maintenance window.
+
+## Keep state
+
+The bundle keeps rollback history in `/var/lib/docker-release`. Caddy also keeps its certificates and local certificate authority there. The image gives this folder its own volume, so your data survives `docker compose restart` and `docker compose up -d` after an image change.
+
+`docker compose down` starts you over with an empty volume. To keep your data through `down`, and always with Caddy, name the volume:
+
+```yaml
+services:
+  docker-release:
+    volumes:
+      - docker-release-state:/var/lib/docker-release
+
+volumes:
+  docker-release-state:
+```
+
+Keep this volume when you upgrade.
+
+## Stop time
+
+Compose waits 10 seconds for a service to stop, and an idle bundle stops well inside that. If requests can stay open longer, set `stop_grace_period: 90s` on the service so they can finish.
 
 ## Project mount
 

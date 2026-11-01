@@ -150,7 +150,7 @@ Use any check that proves the container can serve work — a health endpoint, a 
 
 ## Rollback State
 
-By default, rollback state lives inside the `docker-release` container and is lost if it restarts. Mount a volume to persist it:
+Rollback history lives in `/var/lib/docker-release`. The image gives that folder its own volume, so it survives restarts and image upgrades. To keep it through `docker compose down` too, mount a named volume there:
 
 ```yaml
 services:
