@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/malico/docker-release/internal/config"
 )
 
 type traefikHTTPConfig map[string]map[string]any
@@ -46,17 +48,27 @@ func (p *TraefikProvider) generateRoutes(state *UpstreamState) error {
 	if previewLive {
 		routeData = append(routeData, "\npreview-live"...)
 	}
-	// Names include the complete config, preview servers too, so an older API
-	// snapshot cannot confirm it.
-	revision := sha256.Sum256(append([]byte(renderTraefikYAMLWithPreview(state, p.route.PreviewHost != "")), routeData...))
+	linkLive := p.linkLive(state)
+	if linkLive {
+		routeData = append(routeData, "\npreview-link "+state.PreviewToken...)
+	}
+	// Names include the complete config, preview servers and token too, so an
+	// older API snapshot cannot confirm it.
+	revision := sha256.Sum256(append([]byte(renderTraefikYAMLWithPreview(state, p.route.PreviewHost != "" || linkLive)), routeData...))
 	name := fmt.Sprintf("dr-%s-%x", state.Service, revision[:12])
 	httpConfig := traefikHTTPConfig{"services": traefikServices(name, state)}
 	config := map[string]any{"http": httpConfig}
 	if p.route.Host != "" || p.route.Path != "" {
 		p.addRouters(httpConfig, name)
 	}
-	if previewLive {
-		p.addPreviewRouters(httpConfig, name, state)
+	if p.route.PreviewLink && (p.route.Host != "" || p.route.Path != "") {
+		p.addQuietRouters(httpConfig, name)
+	}
+	if previewLive || linkLive {
+		p.addPreviewRouters(httpConfig, name, state, previewLive, linkLive)
+	}
+	if linkLive {
+		p.addLinkRouters(httpConfig, name, state, previewLive)
 	}
 	if p.route.SSLCert != "" {
 		config["tls"] = map[string]any{"certificates": []any{map[string]string{
@@ -188,29 +200,187 @@ func (p *TraefikProvider) addRouters(config traefikHTTPConfig, name string) {
 // path-only main route cannot answer for it.
 const previewPriority = 1_000_000
 
-// addPreviewRouters adds a service and routers that send the preview host to the
-// preview servers. It runs after `addRouters` and adds to the routers it made.
-func (p *TraefikProvider) addPreviewRouters(config traefikHTTPConfig, name string, state *UpstreamState) {
+// addPreviewRouters adds the `-preview` service, and the routers that send the
+// preview host to it. It runs after `addRouters` and adds to the routers it made.
+// With a live preview link the host serves the preview servers only to requests
+// that carry the token.
+func (p *TraefikProvider) addPreviewRouters(config traefikHTTPConfig, name string, state *UpstreamState, hostLive, linkLive bool) {
 	service := name + "-preview"
 	config["services"][service] = traefikLoadBalancer(state.Preview, "", "")
+	if !hostLive {
+		return
+	}
 	rule := fmt.Sprintf("Host(`%s`)", p.route.PreviewHost)
+	serving := rule
+	if linkLive {
+		serving = rule + " && " + traefikTokenRule(state.PreviewToken)
+	}
 	routers := config["routers"]
 	if routers == nil {
 		routers = map[string]any{}
 		config["routers"] = routers
 	}
-	httpRouter := map[string]any{"entryPoints": []string{"web"}, "rule": rule, "service": service, "priority": previewPriority}
+	httpRouter := map[string]any{"entryPoints": []string{"web"}, "rule": serving, "service": service, "priority": previewPriority}
 	routers[service+"-http"] = httpRouter
 	if p.route.SSLCert == "" {
 		return
 	}
 	routers[service+"-https"] = map[string]any{
-		"entryPoints": []string{"websecure"}, "rule": rule, "service": service,
+		"entryPoints": []string{"websecure"}, "rule": serving, "service": service,
 		"priority": previewPriority, "tls": map[string]any{},
 	}
 	if p.route.SSLRedirect {
 		config["services"][service+"-redirect"] = traefikLoadBalancer([]Server{{Addr: "127.0.0.1:8082"}}, "", "")
 		httpRouter["service"] = service + "-redirect"
+		httpRouter["rule"] = rule
+	}
+}
+
+// The token routers sit just under the preview host, and the link routers above
+// both, so a request that carries the cookie and the link still gets the link
+// answer.
+const (
+	previewTokenPriority = previewPriority - 1
+	previewLinkPriority  = previewPriority + 1
+)
+
+// addQuietRouters copies the main routers for requests that carry the link
+// parameter with any value, and turns their access log off. The log holds the
+// whole URL, so a link sent when it does nothing (before or after the release)
+// would write the token to it. The requests still reach the app untouched.
+// `QueryRegexp` is needed because `Query` with only a name matches an empty value.
+// It runs after `addRouters` and copies the routers it made.
+func (p *TraefikProvider) addQuietRouters(cfg traefikHTTPConfig, name string) {
+	routers := cfg["routers"]
+	rule := traefikRouteRule(p.route) + fmt.Sprintf(" && QueryRegexp(`%s`, `.*`)", config.PreviewQueryParam)
+	for _, suffix := range []string{"http", "https"} {
+		main, ok := routers[name+"-"+suffix].(map[string]any)
+		if !ok {
+			continue
+		}
+		quiet := make(map[string]any, len(main)+3)
+		for key, value := range main {
+			quiet[key] = value
+		}
+		quiet["rule"] = rule
+		quiet["priority"] = previewTokenPriority - 1
+		quiet["observability"] = map[string]any{"accessLogs": false}
+		routers[name+"-quiet-"+suffix] = quiet
+	}
+}
+
+// linkLive reports whether the preview link works in this config: the label is
+// set and green waits with a live token.
+func (p *TraefikProvider) linkLive(state *UpstreamState) bool {
+	return p.route.PreviewLink && state.PreviewToken != "" && len(state.Preview) > 0
+}
+
+// traefikTokenRule matches a request that carries the token in the preview
+// header, or as one cookie among the others.
+func traefikTokenRule(token string) string {
+	cookie := `(^|;\s*)` + config.PreviewCookie + "=" + token + `\s*(;|$)`
+	return fmt.Sprintf("(Header(`%s`, `%s`) || HeaderRegexp(`Cookie`, `%s`))", config.PreviewHeader, token, cookie)
+}
+
+// traefikLinkRedirects answers the link request: one regex for each place the
+// parameter can sit in the query. A regex that does not match passes the request
+// on, so only the one that fits answers. The last one always matches and drops the
+// query, so a request that Traefik takes for a link but the others miss (an
+// encoded name) is never sent to the app. Each regex is matched against the full URL.
+func traefikLinkRedirects(token string) []map[string]any {
+	param := regexp.QuoteMeta(config.PreviewQueryParam + "=" + token)
+	start := `^[^:/]+://[^/?]+([^?]*)`
+	cases := [][2]string{
+		{start + `\?` + param + `$`, "${1}"},
+		{start + `\?` + param + `&(.*)$`, "${1}?${2}"},
+		{start + `\?(.*)&` + param + `$`, "${1}?${2}"},
+		{start + `\?(.*)&` + param + `&(.*)$`, "${1}?${2}&${3}"},
+		{start + `.*$`, "${1}"},
+	}
+	out := make([]map[string]any, 0, len(cases))
+	for _, c := range cases {
+		out = append(out, map[string]any{"redirectRegex": map[string]any{
+			"regex": c[0], "replacement": c[1], "permanent": false,
+		}})
+	}
+	return out
+}
+
+// addLinkRouters adds the routers for the preview token. A request with the
+// cookie or the header goes to the preview servers only. A request with the link
+// parameter gets the cookie and a redirect that drops the parameter, and never
+// reaches the app. Neither runs on plain HTTP when that port only redirects to
+// HTTPS. The link requests are kept out of the access log, because their URL
+// holds the token.
+func (p *TraefikProvider) addLinkRouters(cfg traefikHTTPConfig, name string, state *UpstreamState, hostLive bool) {
+	token := state.PreviewToken
+	service := name + "-preview"
+	secure := p.route.SSLCert != ""
+	type entry struct {
+		suffix, entryPoint, cookie string
+		tls                        bool
+	}
+	var entries []entry
+	cookie := fmt.Sprintf("%s=%s; Path=/; HttpOnly; SameSite=Lax", config.PreviewCookie, token)
+	middlewares := cfg["middlewares"]
+	if middlewares == nil {
+		middlewares = map[string]any{}
+		cfg["middlewares"] = middlewares
+	}
+	cookieMiddleware := func(id, value string) string {
+		middlewares[id] = map[string]any{"headers": map[string]any{
+			"customResponseHeaders": map[string]string{"Set-Cookie": value},
+		}}
+		return id
+	}
+	if !secure || !p.route.SSLRedirect {
+		entries = append(entries, entry{"http", "web", cookieMiddleware(name+"-link-cookie", cookie), false})
+	}
+	if secure {
+		entries = append(entries, entry{"https", "websecure", cookieMiddleware(name+"-link-cookie-secure", cookie+"; Secure"), true})
+	}
+	var answer []string
+	for i, redirect := range traefikLinkRedirects(token) {
+		id := fmt.Sprintf("%s-link-redirect-%d", name, i)
+		middlewares[id] = redirect
+		answer = append(answer, id)
+	}
+
+	routers := cfg["routers"]
+	if routers == nil {
+		routers = map[string]any{}
+		cfg["routers"] = routers
+	}
+	add := func(id, rule, svc string, priority int, chain []string, e entry) {
+		router := map[string]any{
+			"entryPoints": []string{e.entryPoint}, "rule": rule, "service": svc, "priority": priority,
+		}
+		if len(chain) > 0 {
+			router["middlewares"] = chain
+		}
+		if e.tls {
+			router["tls"] = map[string]any{}
+		}
+		if svc == "noop@internal" {
+			router["observability"] = map[string]any{"accessLogs": false}
+		}
+		routers[id+"-"+e.suffix] = router
+	}
+	query := fmt.Sprintf("Query(`%s`, `%s`)", config.PreviewQueryParam, token)
+	for _, e := range entries {
+		chain := append([]string{e.cookie}, answer...)
+		if p.route.Host != "" || p.route.Path != "" {
+			rule := traefikRouteRule(p.route)
+			var strip []string
+			if path := p.route.Path; path != "" && path != "/" {
+				strip = []string{name + "-strip"}
+			}
+			add(name+"-token", rule+" && "+traefikTokenRule(token), service, previewTokenPriority, strip, e)
+			add(name+"-link", rule+" && "+query, "noop@internal", previewLinkPriority, chain, e)
+		}
+		if hostLive {
+			add(name+"-hostlink", fmt.Sprintf("Host(`%s`) && %s", p.route.PreviewHost, query), "noop@internal", previewLinkPriority, chain, e)
+		}
 	}
 }
 
