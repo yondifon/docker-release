@@ -6,15 +6,24 @@ CADDY_IMAGE ?= $(IMAGE)-caddy
 HAPROXY_IMAGE ?= $(IMAGE)-haproxy
 TRAEFIK_IMAGE ?= $(IMAGE)-traefik
 
+PROXIES := nginx angie caddy haproxy traefik
+# Test stacks under tests/ that have up-<name> and down-<name> targets.
+STACKS := nginx nginx-bundled angie-bundled caddy-bundled haproxy-bundled traefik-bundled angie traefik nginx-proxy caddy haproxy
+
+BUILD_TARGETS := $(addprefix build-,$(PROXIES))
+UP_TARGETS := $(addprefix up-,$(STACKS))
+DOWN_TARGETS := $(addprefix down-,$(STACKS))
+
+# bundle_image <proxy>: the image name for a bundled proxy, e.g. NGINX_IMAGE.
+bundle_image = $($(shell echo $(1) | tr a-z A-Z)_IMAGE)
+
 # Bump type passed as a goal: make publish major|minor|fix
 BUMP := $(filter major minor fix,$(MAKECMDGOALS))
 
-.PHONY: dev dev-remove test lint build build-regular build-nginx build-angie build-caddy build-haproxy build-traefik publish tag buildx-builder \
-	major minor fix print-version \
-	up-nginx up-nginx-bundled up-angie-bundled up-caddy-bundled up-haproxy-bundled up-traefik-bundled up-angie up-traefik up-nginx-proxy up-caddy up-haproxy \
-	down-nginx down-nginx-bundled down-angie-bundled down-caddy-bundled down-haproxy-bundled down-traefik-bundled down-angie down-traefik down-nginx-proxy down-caddy down-haproxy
+.PHONY: dev dev-remove test lint build build-regular publish tag buildx-builder \
+	major minor fix print-version $(BUILD_TARGETS) $(UP_TARGETS) $(DOWN_TARGETS)
 
-build: build-regular build-nginx build-angie build-caddy build-haproxy build-traefik
+build: build-regular $(BUILD_TARGETS)
 
 build-regular:
 	docker build \
@@ -23,17 +32,12 @@ build-regular:
 		-t $(IMAGE):latest \
 		.
 
-build-nginx: BUNDLE_IMAGE = $(NGINX_IMAGE)
-build-angie: BUNDLE_IMAGE = $(ANGIE_IMAGE)
-build-caddy: BUNDLE_IMAGE = $(CADDY_IMAGE)
-build-haproxy: BUNDLE_IMAGE = $(HAPROXY_IMAGE)
-build-traefik: BUNDLE_IMAGE = $(TRAEFIK_IMAGE)
-build-nginx build-angie build-caddy build-haproxy build-traefik:
+$(BUILD_TARGETS): build-%:
 	docker build \
-		-f dockerfiles/$(patsubst build-%,%,$@).Dockerfile \
+		-f dockerfiles/$*.Dockerfile \
 		--build-arg VERSION=$(VERSION) \
-		-t $(BUNDLE_IMAGE):$(VERSION) \
-		-t $(BUNDLE_IMAGE):latest \
+		-t $(call bundle_image,$*):$(VERSION) \
+		-t $(call bundle_image,$*):latest \
 		.
 
 tag:
@@ -91,66 +95,21 @@ else
 	@test "$(VERSION)" != "dev" || (echo "ERROR: set VERSION=x.y.z or use: make publish major|minor|fix"; exit 1)
 	$(MAKE) buildx-builder
 	@major=$$(echo "$(VERSION)" | grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$$' | cut -d. -f1); \
-	docker buildx build \
-		--builder docker-release-builder \
-		--platform linux/amd64,linux/arm64 \
-		--target runtime \
-		--build-arg VERSION=$(VERSION) \
-		-t $(IMAGE):$(VERSION) \
-		-t $(IMAGE):latest \
-		$${major:+-t $(IMAGE):$$major} \
-		--push \
-		. && \
-	docker buildx build \
-		--builder docker-release-builder \
-		--platform linux/amd64,linux/arm64 \
-		-f dockerfiles/nginx.Dockerfile \
-		--build-arg VERSION=$(VERSION) \
-		-t $(NGINX_IMAGE):$(VERSION) \
-		-t $(NGINX_IMAGE):latest \
-		$${major:+-t $(NGINX_IMAGE):$$major} \
-		--push \
-		. && \
-	docker buildx build \
-		--builder docker-release-builder \
-		--platform linux/amd64,linux/arm64 \
-		-f dockerfiles/angie.Dockerfile \
-		--build-arg VERSION=$(VERSION) \
-		-t $(ANGIE_IMAGE):$(VERSION) \
-		-t $(ANGIE_IMAGE):latest \
-		$${major:+-t $(ANGIE_IMAGE):$$major} \
-		--push \
-		. && \
-	docker buildx build \
-		--builder docker-release-builder \
-		--platform linux/amd64,linux/arm64 \
-		-f dockerfiles/caddy.Dockerfile \
-		--build-arg VERSION=$(VERSION) \
-		-t $(CADDY_IMAGE):$(VERSION) \
-		-t $(CADDY_IMAGE):latest \
-		$${major:+-t $(CADDY_IMAGE):$$major} \
-		--push \
-		. && \
-	docker buildx build \
-		--builder docker-release-builder \
-		--platform linux/amd64,linux/arm64 \
-		-f dockerfiles/haproxy.Dockerfile \
-		--build-arg VERSION=$(VERSION) \
-		-t $(HAPROXY_IMAGE):$(VERSION) \
-		-t $(HAPROXY_IMAGE):latest \
-		$${major:+-t $(HAPROXY_IMAGE):$$major} \
-		--push \
-		. && \
-	docker buildx build \
-		--builder docker-release-builder \
-		--platform linux/amd64,linux/arm64 \
-		-f dockerfiles/traefik.Dockerfile \
-		--build-arg VERSION=$(VERSION) \
-		-t $(TRAEFIK_IMAGE):$(VERSION) \
-		-t $(TRAEFIK_IMAGE):latest \
-		$${major:+-t $(TRAEFIK_IMAGE):$$major} \
-		--push \
-		. && $(MAKE) tag
+	publish_image() { \
+		docker buildx build \
+			--builder docker-release-builder \
+			--platform linux/amd64,linux/arm64 \
+			$$2 \
+			--build-arg VERSION=$(VERSION) \
+			-t $$1:$(VERSION) \
+			-t $$1:latest \
+			$${major:+-t $$1:$$major} \
+			--push \
+			.; \
+	}; \
+	publish_image $(IMAGE) "--target runtime" && \
+	$(foreach p,$(PROXIES),publish_image $(call bundle_image,$(p)) "-f dockerfiles/$(p).Dockerfile" && ) \
+	$(MAKE) tag
 endif
 
 buildx-builder:
@@ -187,44 +146,8 @@ lint:
 	go vet -tags bundled_traefik ./...
 	go -C packaging/caddy/runtime vet -p 2 ./...
 
-up-nginx:
-	docker compose -f tests/nginx/docker-compose.yml up --build
+$(UP_TARGETS): up-%:
+	docker compose -f tests/$*/docker-compose.yml up --build
 
-up-nginx-bundled up-angie-bundled up-caddy-bundled up-haproxy-bundled up-traefik-bundled:
-	docker compose -f tests/$(patsubst up-%,%,$@)/docker-compose.yml up --build
-
-up-angie:
-	docker compose -f tests/angie/docker-compose.yml up --build
-
-up-traefik:
-	docker compose -f tests/traefik/docker-compose.yml up --build
-
-up-nginx-proxy:
-	docker compose -f tests/nginx-proxy/docker-compose.yml up --build
-
-up-caddy:
-	docker compose -f tests/caddy/docker-compose.yml up --build
-
-up-haproxy:
-	docker compose -f tests/haproxy/docker-compose.yml up --build
-
-down-nginx:
-	docker compose -f tests/nginx/docker-compose.yml down -v
-
-down-nginx-bundled down-angie-bundled down-caddy-bundled down-haproxy-bundled down-traefik-bundled:
-	docker compose -f tests/$(patsubst down-%,%,$@)/docker-compose.yml down -v
-
-down-angie:
-	docker compose -f tests/angie/docker-compose.yml down -v
-
-down-traefik:
-	docker compose -f tests/traefik/docker-compose.yml down -v
-
-down-nginx-proxy:
-	docker compose -f tests/nginx-proxy/docker-compose.yml down -v
-
-down-caddy:
-	docker compose -f tests/caddy/docker-compose.yml down -v
-
-down-haproxy:
-	docker compose -f tests/haproxy/docker-compose.yml down -v
+$(DOWN_TARGETS): down-%:
+	docker compose -f tests/$*/docker-compose.yml down -v

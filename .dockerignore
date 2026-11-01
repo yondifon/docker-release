@@ -28,7 +28,6 @@ coverage.out
 docker-autoheal/
 docker-rollout/
 .oga_tmp/
-idea.md
 
 # Not needed to build the controller image
 docs/

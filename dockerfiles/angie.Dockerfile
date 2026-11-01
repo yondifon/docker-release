@@ -14,7 +14,9 @@ FROM docker/compose-bin:${COMPOSE_VERSION} AS compose
 FROM docker.angie.software/angie:1.12.4-minimal AS runtime
 
 RUN apk add --no-cache ca-certificates tini \
-  && mkdir -p /run/angie /shared/angie-config /shared/angie-routes
+  && mkdir -p /run/angie /shared/angie-config /shared/angie-routes \
+    /var/lib/docker-release
+VOLUME /var/lib/docker-release
 
 COPY --from=builder /bin/dr /usr/local/bin/dr
 COPY --from=compose /docker-compose /usr/local/bin/docker-compose
