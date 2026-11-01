@@ -214,6 +214,8 @@ server {
 }
 ```
 
+In the bundle you can also set `release.preview.token`, so one browser sees the new version on the normal host; see [Preview link](../readme.md#preview-link). With a separate Angie, `release.preview.token` is refused.
+
 ## Notes
 
 - Cookie affinity uses a generated cookie name like `_srr_a172cedcae`.

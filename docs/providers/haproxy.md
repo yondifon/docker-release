@@ -210,6 +210,8 @@ With a separate HAProxy, `docker-release` also writes `backend app_preview_be` i
 use_backend app_preview_be if { hdr(host) -i next.app.example.com }
 ```
 
+In the bundle you can also set `release.preview.token`, so one browser sees the new version on the normal host; see [Preview link](../readme.md#preview-link). With a separate HAProxy, `release.preview.token` is refused.
+
 ## Notes
 
 - HAProxy must run with `-W` (master-worker mode) for graceful reloads.

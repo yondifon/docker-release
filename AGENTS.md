@@ -205,7 +205,7 @@ Optional HTTP API (port 9080) + web dashboard (port 9081), both off by default. 
 | `DR_WEB_PORT` | `9081` | web port |
 | `DR_API_TOKEN` | — | when set, mutating endpoints (`POST .../cancel`) require `Authorization: Bearer <token>` (constant-time compare). Unset logs a startup warning and leaves them open — only safe on trusted networks |
 
-Routes: `GET /api/health`, `GET /api/services`, `GET /api/services/{service}`, `POST /api/services/{service}/cancel`, `GET /api/deployments/{id}`, `POST /api/deployments/{id}/cancel`. Unknown or invalid service names return 404.
+Routes: `GET /api/health`, `GET /api/services`, `GET /api/services/{service}`, `POST /api/services/{service}/cancel`, `GET /api/deployments/{id}`, `POST /api/deployments/{id}/cancel`. Unknown or invalid service names return 404. `GET /api/services` and `GET /api/services/{service}` add `preview_link` and `preview_token` only for a caller with `DR_API_TOKEN` (see `release.preview.token`); the web dashboard never shows them.
 
 ---
 

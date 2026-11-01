@@ -13,6 +13,7 @@ services:
       release.drain_timeout: 2s
       release.bg.soak_time: 3s
       release.preview.host: ${BG_PREVIEW_HOST:-}
+      release.preview.token: ${BG_PREVIEW_TOKEN:-}
       release.check.command: ${BG_CHECK_COMMAND:-}
       release.check.service: ${BG_CHECK_SERVICE:-}
       release.check.timeout: ${BG_CHECK_TIMEOUT:-}

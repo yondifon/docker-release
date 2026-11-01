@@ -101,6 +101,7 @@ If you set `release.check.command`, it runs while the preview address works, and
 | Variable | Value |
 |---|---|
 | `RELEASE_PREVIEW_URL` | The preview address, such as `https://next.app.example.com`. It starts with `https://` when `release.tls.cert` is set, and with `http://` otherwise. |
+| `RELEASE_PREVIEW_TOKEN` | The preview token, when `release.preview.token` is set. See [Preview link](#preview-link). |
 
 Before you use it:
 
@@ -108,9 +109,35 @@ Before you use it:
 - Use the same certificate settings as the main host. The certificate must also cover the preview host, for example with a wildcard certificate. Caddy gets its certificate by itself.
 - `release.preview.host` is one hostname. It cannot be a wildcard, and it must differ from `release.host` and from every other service's hosts.
 - It works only with `release.strategy: blue-green`. With the `nginx-proxy` provider it is refused, because that provider reads hosts from `VIRTUAL_HOST`.
-- Anyone who knows the preview address can open it while it works. A token for it comes in a later release.
+- Anyone who knows the preview address can open it while it works. To lock it, add a [preview token](#preview-link).
 
 With a [bundled proxy image](bundled-images.md), the route is added for you. With a separate proxy, `docker-release` writes an upstream for the preview, and you add one rule that uses it; see your proxy's page: [Nginx](providers/nginx.md#preview-address), [Angie](providers/angie.md#preview-address), [Caddy](providers/caddy.md#preview-address), [HAProxy](providers/haproxy.md#preview-address), [Traefik](providers/traefik.md#preview-address).
+
+#### Preview link
+
+Try the new version on your real address, with your real certificate and cookies, and with no extra DNS. Only people who have the link see it; everyone else keeps seeing the old version.
+
+```yaml
+release.host: app.example.com
+release.preview.token: auto
+```
+
+While a release waits, `docker release status app` prints the link:
+
+```
+Preview:    https://app.example.com/?release-preview=<token>
+```
+
+- Open the link once. It sets a cookie and takes you to the same page without the token in the address. From then on, that browser sees the new version on `app.example.com`.
+- A script sends the header `X-Release-Preview: <token>` with each request instead.
+- A wrong or missing token shows the old version. It never shows an error page.
+- With `auto`, every release gets a new random token. The link, the cookie, and the header stop working when users move to the new version or the release fails. After that, a browser that still has the cookie sees the live version.
+- To use a token of your own, for example one from your environment, write `release.preview.token: ${PREVIEW_TOKEN}`. It must be 16 to 128 letters, digits, `-` or `_`. It works only while a new version waits, like an `auto` token.
+- The link keeps any other query parameters on the page you open. The cookie has `HttpOnly` and `SameSite=Lax`, and `Secure` when `release.tls.cert` is set.
+- With `release.preview.host` also set, the preview address needs the token too: the link, the cookie, or the header. Without the token label, the preview address is open as before.
+- `release.check.command` gets the token as `RELEASE_PREVIEW_TOKEN`. A check can send it as the header to test the new version on the real host.
+- Treat the token like a password for the new version. `docker release status` shows it. The API shows it only to a caller who sends `DR_API_TOKEN`, and the web page never shows it. It is not written to the logs. Anyone who can read the shared volume can read it.
+- It works only with a [bundled proxy image](bundled-images.md). With a separate proxy, or with `nginx-proxy`, the release is refused with a message. Use `release.preview.host` there.
 
 ### Canary
 
@@ -175,6 +202,7 @@ release.affinity: cookie  # sticky sessions (Angie, Caddy, HAProxy, Traefik only
 | `release.check.max_errors` | `0` | Blue/green, bundled images: errors allowed in the window |
 | `release.check.window` | `5m` | Blue/green, bundled images: how long to watch after users move |
 | `release.preview.host` | empty | Blue/green: a host that shows only the new version until users move; see [Preview address](#preview-address) |
+| `release.preview.token` | empty | Blue/green, bundled images: `auto`, or a token of your own. A link with it shows the new version on the normal host to one browser; see [Preview link](#preview-link) |
 | `release.canary.start_percentage` | `10` | Canary: initial traffic weight on new containers |
 | `release.canary.step` | `20` | Canary: weight added each interval |
 | `release.canary.interval` | `2m` | Canary: time between weight increases |

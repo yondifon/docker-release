@@ -109,6 +109,8 @@ The watch reads the access log lines the bundle writes. Each line now says which
 
 Add `release.preview.host: next.app.example.com` to a blue/green app, and every bundle adds a route for that host during a release. It shows only the new version, and answers 404 once users move or the release fails. The route uses the same certificate settings as `release.host`, so a certificate you mount must cover the preview host too. Caddy gets its own certificate. See [Preview address](readme.md#preview-address).
 
+To try the new version on the normal host instead, with no extra DNS, add `release.preview.token: auto`. `docker release status app` then prints a link that shows the new version to one browser. This works only in a bundled image. See [Preview link](readme.md#preview-link).
+
 ## Add TLS
 
 Nginx, Angie, HAProxy, and Traefik do not obtain or renew certificates for you. Use your certificate tool, mount its output read-only, and publish port 443. The same mounted-certificate setup works with all five bundles:

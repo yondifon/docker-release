@@ -19,6 +19,20 @@ releases a new version of `bg_app`, and checks what users saw:
            host answers 404 and the main host serves the new version
   preview_failed
            a failing check also takes the preview host away
+  preview_link
+           `release.preview.token: auto`: while the check runs, a browser with
+           the cookie, or a script with the header, reaches the new version on
+           the normal host and everyone else stays on the old one; the link
+           sets the cookie and keeps the rest of the query; after the switch
+           the token does nothing
+  preview_link_failed
+           the same, and a failing check takes the token away too
+  preview_link_host
+           a fixed token together with a preview host: the preview host also
+           needs the token
+  preview_link_tls
+           the same over HTTPS with a test certificate: the cookie from the
+           link is Secure there, and not on plain HTTP
 """
 import argparse
 import dataclasses
@@ -26,6 +40,9 @@ import http.client
 import json
 import os
 import re
+import shutil
+import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -95,10 +112,13 @@ class Traffic:
 
 
 class Stack:
-    def __init__(self, proxy, labels):
+    def __init__(self, proxy, labels, tls=False):
         self.proxy = proxy
         self.env = {**labels}
         self.compose = ["docker", "compose", "-f", f"tests/{proxy}-bundled/docker-compose.yml", "-f", "tests/bundled/bluegreen.yml"]
+        if tls:
+            self.env["PWD"] = str(ROOT)
+            self.compose += ["-f", "tests/bundled/bluegreen-tls.yml"]
         self.project = f"{proxy}-bundled"
 
     def run(self, *args, **kwargs):
@@ -108,11 +128,15 @@ class Stack:
 
     def __enter__(self):
         build_app("ok")
-        result = self.run("up", "-d", "--build", "--wait", "docker-release", "bg_app")
-        assert result.returncode == 0, result.stdout + result.stderr
-        result = self.run("create", "smoke")
-        assert result.returncode == 0, result.stdout + result.stderr
-        self.wait_until_serving()
+        try:
+            result = self.run("up", "-d", "--build", "--wait", "docker-release", "bg_app")
+            assert result.returncode == 0, result.stdout + result.stderr
+            result = self.run("create", "smoke")
+            assert result.returncode == 0, result.stdout + result.stderr
+            self.wait_until_serving()
+        except BaseException:
+            self.__exit__()
+            raise
         return self
 
     def wait_until_serving(self):
@@ -302,10 +326,205 @@ def preview_scenario(proxy, check_command, passes):
         return {"samples": len(during), "after_preview": after_preview[0], "after_main": after_main[1]}
 
 
+LINK_WAIT = 14
+TLS_PORT = 8447
+CERTS = ROOT / ".oga_tmp" / "certs"
+FIXED_TOKEN = "fixed-token-for-the-live-check"
+
+
+class TLSConnection(http.client.HTTPConnection):
+    """Reaches the proxy over HTTPS as `check.localhost`, and again after the server closes it."""
+
+    def __init__(self, port, context):
+        super().__init__("127.0.0.1", port, timeout=3)
+        self.context = context
+
+    def connect(self):
+        raw = socket.create_connection((self.host, self.port), self.timeout)
+        self.sock = self.context.wrap_socket(raw, server_hostname=HOST)
+
+
+def preview_cookies(response):
+    """The `Set-Cookie` values for the preview cookie. A proxy may set cookies of its own."""
+    return [value for value in response.msg.get_all("Set-Cookie", []) if value.startswith("release_preview=")]
+
+
+def open_connection(port, tls=None):
+    """A connection to the proxy; `tls` is the SSL context that trusts the test certificate."""
+    if tls:
+        return TLSConnection(port, tls)
+    return http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+
+
+def request(port, host, path="/", headers=None, connection=None, tls=None):
+    """One request through the proxy, without following redirects.
+
+    Returns (status, version, response). Pass a connection to keep it alive.
+    """
+    own = connection is None
+    connection = connection or open_connection(port, tls)
+    try:
+        connection.request("GET", path, headers={"Host": host, **(headers or {})})
+        response = connection.getresponse()
+        body = response.read().decode()
+        found = re.search(r"version=(\w+)", body)
+        response.body = body
+        return response.status, found.group(1) if found else "", response
+    finally:
+        if own:
+            connection.close()
+
+
+def wait_for_link(stack, port, fixed):
+    """The token, once `dr status` shows it and the proxy sends it to the new version."""
+    deadline = time.monotonic() + 90
+    token = fixed
+    while time.monotonic() < deadline:
+        if not token:
+            found = re.search(r"Preview:\s+\S*\?release-preview=(\w+)", stack.status())
+            token = found.group(1) if found else None
+        if token:
+            try:
+                if request(port, HOST, headers={"X-Release-Preview": token})[1] == "bad":
+                    return token
+            except OSError:
+                pass
+        time.sleep(0.5)
+    raise AssertionError("the preview link never started sending requests to the new version")
+
+
+def check_link_while_green_waits(port, token, preview_host, tls=None):
+    def get(host, path="/", headers=None, connection=None):
+        return request(port, host, path, headers, connection, tls)
+
+    cookie = f"release_preview={token}"
+    checks = {
+        "no token": (get(HOST), 200, "ok"),
+        "header": (get(HOST, headers={"X-Release-Preview": token}), 200, "bad"),
+        "wrong header": (get(HOST, headers={"X-Release-Preview": token + "x"}), 200, "ok"),
+        "cookie among others": (get(HOST, headers={"Cookie": f"a=1; {cookie}; b=2"}), 200, "bad"),
+        "wrong cookie": (get(HOST, headers={"Cookie": cookie + "x"}), 200, "ok"),
+        "token on a path the new version breaks": (get(HOST, "/signup", {"Cookie": cookie}), 500, "bad"),
+        "wrong token in the link": (get(HOST, "/?x=1&release-preview=wrong"), 200, "ok"),
+    }
+    for name, (got, status, version) in checks.items():
+        assert (got[0], got[1]) == (status, version), f"{name}: want {(status, version)}, got {got[:2]}"
+    assert "query=x=1&release-preview=wrong" in checks["wrong token in the link"][0][2].body, "a wrong token must reach the app untouched"
+    for name in ("no token", "wrong header", "wrong token in the link"):
+        assert not preview_cookies(checks[name][0][2]), f"{name}: no preview cookie may be set"
+
+    status, _, response = get(HOST, f"/?release-preview={token}")
+    assert len(preview_cookies(response)) == 1, response.msg.get_all("Set-Cookie")
+    set_cookie = preview_cookies(response)[0]
+    assert status == 302 and response.getheader("Location") == "/", (status, response.getheader("Location"))
+    assert set_cookie.startswith(cookie) and "HttpOnly" in set_cookie and "SameSite=Lax" in set_cookie and "Path=/" in set_cookie, set_cookie
+    assert ("Secure" in set_cookie) == bool(tls), f"the cookie is Secure on HTTPS only: {set_cookie}"
+    assert "version=" not in response.body, "the link must not reach the app"
+    got = get(HOST, headers={"Cookie": set_cookie.split(";")[0]})
+    assert got[:2] == (200, "bad"), f"the cookie from the link should lead to the new version, got {got[:2]}"
+
+    for query, location in {
+        f"release-preview={token}&b=2&c=3": "/signup?b=2&c=3",
+        f"a=1&release-preview={token}": "/signup?a=1",
+        f"a=1&release-preview={token}&b=2": "/signup?a=1&b=2",
+        f"a=1&b=%20x%26y&release-preview={token}&c=3": "/signup?a=1&b=%20x%26y&c=3",
+        f"release-preview={token}": "/signup",
+    }.items():
+        status, _, response = get(HOST, f"/signup?{query}")
+        assert status == 302 and response.getheader("Location") == location, f"{query}: got {status} {response.getheader('Location')}, want {location}"
+
+    # One kept-alive connection must follow each request, not stay where it started.
+    connection = open_connection(port, tls)
+    try:
+        seen = [get(HOST, headers=h, connection=connection)[1]
+                for h in ({"X-Release-Preview": token}, {}, {"X-Release-Preview": token}, {})]
+    finally:
+        connection.close()
+    assert seen == ["bad", "ok", "bad", "ok"], seen
+    if not tls:
+        # Some proxies answer an unknown host on HTTPS with their first site, token or not.
+        assert get("unknown.localhost", headers={"X-Release-Preview": token})[0] == 404, "an unknown host must stay a 404"
+
+    if preview_host:
+        assert get(PREVIEW_HOST)[0] == 404, "the preview host needs the token"
+        assert get(PREVIEW_HOST, headers={"X-Release-Preview": token + "x"})[0] == 404
+        for headers in ({"X-Release-Preview": token}, {"Cookie": cookie}):
+            got = get(PREVIEW_HOST, headers=headers)
+            assert got[:2] == (200, "bad"), f"{headers}: got {got[:2]}"
+        status, _, response = get(PREVIEW_HOST, f"/signup?a=1&release-preview={token}")
+        assert status == 302 and response.getheader("Location") == "/signup?a=1" and preview_cookies(response)[0].startswith(cookie)
+
+
+def check_link_after_release(port, token, passes):
+    """The token does nothing once the release is over: the app gets the link as it was sent."""
+    expected = "bad" if passes else "ok"
+    for name, headers in {"cookie": {"Cookie": f"release_preview={token}"}, "header": {"X-Release-Preview": token}}.items():
+        got = request(port, HOST, headers=headers)
+        assert got[:2] == (200, expected), f"{name} after the release: want {(200, expected)}, got {got[:2]}"
+    got = request(port, HOST, f"/?a=1&release-preview={token}")
+    assert got[:2] == (200, expected) and not preview_cookies(got[2]), f"the link must not be answered by the proxy any more: {got[:2]}"
+    assert f"query=a=1&release-preview={token}" in got[2].body, got[2].body
+
+
+def trusted_context():
+    """An SSL context that trusts only the test certificate."""
+    return ssl.create_default_context(cafile=str(CERTS / "cert.pem"))
+
+
+def make_certificate():
+    CERTS.mkdir(parents=True, exist_ok=True)
+    command(
+        "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", f"/CN={HOST}",
+        "-addext", f"subjectAltName=DNS:{HOST},DNS:{PREVIEW_HOST},IP:127.0.0.1",
+        "-keyout", str(CERTS / "key.pem"), "-out", str(CERTS / "cert.pem"),
+    )
+
+
+def preview_link_scenario(proxy, passes, token, preview_host=False, tls=False):
+    wait = f'test -n "$RELEASE_PREVIEW_TOKEN" || exit 3; sleep {LINK_WAIT}'
+    labels = {"BG_PREVIEW_TOKEN": token, "BG_CHECK_COMMAND": wait if passes else wait + "; exit 1", "BG_CHECK_TIMEOUT": "60s"}
+    if preview_host:
+        labels["BG_PREVIEW_HOST"] = PREVIEW_HOST
+    port = PORTS[proxy]
+    if tls:
+        make_certificate()
+    with Stack(proxy, labels, tls) as stack:
+        old = stack.app_ids()
+        before = request(port, HOST, "/?release-preview=anything")
+        assert before[:2] == (200, "ok") and not preview_cookies(before[2]), "no link works before a release"
+        build_app("bad")
+        thread, outcome = run_release_in_background(stack)
+        live = wait_for_link(stack, port, token if token != "auto" else None)
+        if token == "auto":
+            assert len(live) >= 32 and "Preview:" in stack.status()
+        check_link_while_green_waits(port, live, preview_host)
+        if tls:
+            check_link_while_green_waits(TLS_PORT, live, preview_host, trusted_context())
+        thread.join()
+        result = outcome["result"]
+        if passes:
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert stack.app_ids() != old
+        else:
+            assert result.returncode != 0 and "release undone" in result.stderr and "exit code 1" in result.stderr, result.stderr
+            assert stack.app_ids() == old
+        status = stack.status()
+        assert "release-preview" not in status and "Preview:" not in status, f"the link must go away with the release: {status}"
+        check_link_after_release(port, live, passes)
+        if token == "auto":
+            logs = stack.run("logs", "--no-log-prefix").stdout
+            assert live not in logs, "the token must not be written to the logs"
+        return {"checked_for_seconds": LINK_WAIT}
+
+
 SCENARIOS = {
     "preview": lambda proxy: preview_scenario(
         proxy, 'test "$RELEASE_PREVIEW_URL" = http://next.check.localhost && sleep 8', passes=True),
     "preview_failed": lambda proxy: preview_scenario(proxy, "sleep 8; exit 1", passes=False),
+    "preview_link": lambda proxy: preview_link_scenario(proxy, passes=True, token="auto"),
+    "preview_link_failed": lambda proxy: preview_link_scenario(proxy, passes=False, token="auto"),
+    "preview_link_host": lambda proxy: preview_link_scenario(proxy, passes=True, token=FIXED_TOKEN, preview_host=True),
+    "preview_link_tls": lambda proxy: preview_link_scenario(proxy, passes=True, token="auto", preview_host=True, tls=True),
     "passing": scenario_passing,
     "failing": scenario_failing,
     "rollback": lambda proxy: rollback_scenario(proxy, replicas=2, max_gap=8),
@@ -323,6 +542,7 @@ def main():
             print(json.dumps({"proxy": args.proxy, "scenario": name, **SCENARIOS[name](args.proxy)}), flush=True)
     finally:
         subprocess.run(["docker", "image", "rm", "-f", IMAGE], capture_output=True)
+        shutil.rmtree(CERTS, ignore_errors=True)
 
 
 if __name__ == "__main__":
