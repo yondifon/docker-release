@@ -47,9 +47,39 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 		return err
 	}
 
+	check := d.Config.Check
+	if check.Command != "" {
+		reason, err := runChecks(ctx, d)
+		if err != nil {
+			return err
+		}
+		if reason != "" {
+			return bg.undoBeforeSwitch(ctx, d, ds, reason)
+		}
+	}
+
+	var watch *errorWatch
+	var lost <-chan struct{}
+	if check.Watch {
+		if d.Requests == nil {
+			return fmt.Errorf("release.check error rules need the bundled proxy's access log, which is not available")
+		}
+		watch = newErrorWatch(check, d.New)
+		stopWatching, lostStream, err := d.Requests.Subscribe(watch.observe)
+		if err != nil {
+			return err
+		}
+		defer stopWatching()
+		lost = lostStream
+	}
+
 	slog.Info("all green containers healthy, cutting over traffic", "component", "blue-green", "service", d.Service)
 
 	cutoverUpstream := buildBlueGreenCutoverUpstream(d)
+	if watch != nil {
+		// Users move completely; blue stays up without traffic for a quick way back.
+		cutoverUpstream = newOnlyUpstream(d, d.Config.Affinity)
+	}
 	if err := bg.provider.GenerateConfig(ctx, cutoverUpstream); err != nil {
 		return fmt.Errorf("generating cutover config: %w", err)
 	}
@@ -59,20 +89,18 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 	}
 
 	ds.CurrentWeight = d.Config.BlueGreen.GreenWeight
+	if watch != nil {
+		ds.CurrentWeight = 100
+	}
 	if err := bg.state.Save(ds); err != nil {
 		return fmt.Errorf("saving cutover state: %w", err)
 	}
 
-	soakTime := d.Config.BlueGreen.SoakTime
-	slog.Info("soaking on green before removing blue", "component", "blue-green", "service", d.Service, "soak", soakTime)
-
-	select {
-	case <-time.After(soakTime):
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	if err := promoteAndDrain(ctx, "blue-green", bg.docker, bg.provider, d, ""); err != nil {
+	if watch != nil {
+		if err := bg.settleAfterWindow(ctx, d, watch, lost); err != nil {
+			return err
+		}
+	} else if err := bg.settleAfterSoak(ctx, d); err != nil {
 		return err
 	}
 
@@ -86,6 +114,62 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 
 	slog.Info("deployment complete", "component", "blue-green", "service", d.Service)
 	return nil
+}
+
+// settleAfterWindow watches green for the check window, then removes blue. Too
+// many errors send users back to blue instead.
+func (bg *BlueGreen) settleAfterWindow(ctx context.Context, d *Deployment, watch *errorWatch, lost <-chan struct{}) error {
+	slog.Info("watching green for errors before removing blue", "component", "blue-green", "service", d.Service, "window", watch.rules.Window)
+	end, err := watch.wait(ctx, lost)
+	if err != nil {
+		return err
+	}
+	switch end {
+	case windowTooManyErrors:
+		return bg.undoAfterSwitch(ctx, d, watch.reason())
+	case windowBlind:
+		return bg.undoAfterSwitch(ctx, d, "The proxy's access log stopped, so the new version could not be watched.")
+	}
+	removeContainers(ctx, "blue-green", bg.docker, d.Old)
+	return nil
+}
+
+// settleAfterSoak lets green take its share of traffic for the soak time, then
+// moves everyone to green and removes blue.
+func (bg *BlueGreen) settleAfterSoak(ctx context.Context, d *Deployment) error {
+	soakTime := d.Config.BlueGreen.SoakTime
+	slog.Info("soaking on green before removing blue", "component", "blue-green", "service", d.Service, "soak", soakTime)
+
+	select {
+	case <-time.After(soakTime):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return promoteAndDrain(ctx, "blue-green", bg.docker, bg.provider, d, "")
+}
+
+// undoBeforeSwitch removes the new containers after a failed check. The proxy
+// never sent them traffic, so the old containers keep serving untouched.
+func (bg *BlueGreen) undoBeforeSwitch(ctx context.Context, d *Deployment, ds *state.DeploymentState, reason string) error {
+	slog.Warn("check failed, removing green", "component", "blue-green", "service", d.Service)
+	removeContainers(ctx, "blue-green", bg.docker, d.New)
+
+	ds.Status = state.StatusIdle
+	ds.Containers = state.Containers{Stable: containerIDs(d.Old)}
+	ds.Failure = reason
+	if err := bg.state.Save(ds); err != nil {
+		return fmt.Errorf("saving state after failed check: %w", err)
+	}
+	return &UndoneError{Reason: reason}
+}
+
+// undoAfterSwitch sends users back to the old containers and removes the new ones.
+func (bg *BlueGreen) undoAfterSwitch(ctx context.Context, d *Deployment, reason string) error {
+	slog.Warn("too many errors from green, rolling back", "component", "blue-green", "service", d.Service)
+	if err := rollbackWithFailure(ctx, "blue-green", bg.docker, bg.provider, bg.state, d, reason); err != nil {
+		return err
+	}
+	return &UndoneError{Reason: reason}
 }
 
 func buildBlueGreenCutoverUpstream(d *Deployment) *provider.UpstreamState {

@@ -1,0 +1,26 @@
+# Overlay for check-bluegreen.py: one blue-green app, and the labels each
+# scenario sets through BG_* variables. Empty labels mean "not set".
+services:
+  bg_app:
+    image: docker-release-bg-app:local
+    pull_policy: never
+    scale: ${BG_REPLICAS:-1}
+    labels:
+      release.enable: "true"
+      release.host: check.localhost
+      release.strategy: blue-green
+      release.health_check_timeout: 20s
+      release.drain_timeout: 2s
+      release.bg.soak_time: 3s
+      release.check.command: ${BG_CHECK_COMMAND:-}
+      release.check.service: ${BG_CHECK_SERVICE:-}
+      release.check.timeout: ${BG_CHECK_TIMEOUT:-}
+      release.check.fail_on: ${BG_FAIL_ON:-}
+      release.check.paths: ${BG_PATHS:-}
+      release.check.max_errors: ${BG_MAX_ERRORS:-}
+      release.check.window: ${BG_WINDOW:-}
+
+  smoke:
+    image: alpine:3.23
+    pull_policy: never
+    command: ["true"]

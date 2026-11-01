@@ -44,7 +44,10 @@ type DeploymentState struct {
 	ActiveDeploymentID   string     `json:"active_deployment_id"`
 	PreviousDeploymentID string     `json:"previous_deployment_id"`
 	Containers           Containers `json:"containers"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	// Failure says why the last release was undone, with the output of the
+	// check that failed. It is empty when the release did not fail a check.
+	Failure   string    `json:"failure,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (s *DeploymentState) IsStale(threshold time.Duration) bool {

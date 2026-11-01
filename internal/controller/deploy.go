@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/malico/docker-release/internal/accesslog"
 	"github.com/malico/docker-release/internal/config"
 	"github.com/malico/docker-release/internal/monitor"
 	"github.com/malico/docker-release/internal/provider"
@@ -93,6 +94,12 @@ func (c *Controller) deploy(parentCtx context.Context, key serviceKey, cfg *conf
 		DeployID:     deployID,
 		PrevDeployID: prevDeployID,
 	}
+	if cfg.Check.Command != "" {
+		d.Checks = checkRunner{docker: c.docker, key: key, cfg: cfg}
+	}
+	if cfg.Check.Watch {
+		d.Requests = accesslog.Client{Path: accesslog.SocketPath}
+	}
 
 	deployCtx, deployCancel := context.WithCancel(ctx)
 	defer deployCancel()
@@ -112,6 +119,10 @@ func (c *Controller) deploy(parentCtx context.Context, key serviceKey, cfg *conf
 	}()
 
 	if err := strat.Execute(deployCtx, d); err != nil {
+		if strategy.IsUndone(err) {
+			slog.Warn("release undone; the old containers are serving", "component", "controller", "service", dKey, "reason", err)
+			return
+		}
 		slog.Error("deployment failed", "component", "controller", "service", dKey, "err", err)
 
 		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), cfg.HealthCheckTimeout+cfg.DrainTimeout+30*time.Second)
