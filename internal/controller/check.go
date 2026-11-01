@@ -20,7 +20,7 @@ type checkRunner struct {
 // RunCheck runs the command inside the new container, or, with
 // `release.check.service`, in a one-off container of that Compose service on
 // the new container's network.
-func (r checkRunner) RunCheck(ctx context.Context, target strategy.ContainerInfo) (strategy.CheckResult, error) {
+func (r checkRunner) RunCheck(ctx context.Context, target strategy.ContainerInfo, previewToken string) (strategy.CheckResult, error) {
 	check := r.cfg.Check
 	env := []string{
 		"RELEASE_TARGET=http://" + target.Addr,
@@ -28,7 +28,10 @@ func (r checkRunner) RunCheck(ctx context.Context, target strategy.ContainerInfo
 	}
 
 	if r.cfg.PreviewHost != "" {
-		env = append(env, "RELEASE_PREVIEW_URL="+previewURL(r.cfg))
+		env = append(env, "RELEASE_PREVIEW_URL="+r.cfg.Origin(r.cfg.PreviewHost))
+	}
+	if previewToken != "" {
+		env = append(env, "RELEASE_PREVIEW_TOKEN="+previewToken)
 	}
 
 	var result docker.CommandResult
@@ -49,13 +52,4 @@ func (r checkRunner) RunCheck(ctx context.Context, target strategy.ContainerInfo
 func firstHost(hosts string) string {
 	first, _, _ := strings.Cut(hosts, ",")
 	return strings.TrimSpace(first)
-}
-
-// previewURL is the address of the preview host: https when the service has a
-// certificate, http otherwise.
-func previewURL(cfg *config.ServiceConfig) string {
-	if cfg.TLSCert != "" {
-		return "https://" + cfg.PreviewHost
-	}
-	return "http://" + cfg.PreviewHost
 }

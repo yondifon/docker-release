@@ -69,6 +69,12 @@ type UpstreamState struct {
 	// Preview lists the servers that answer on the preview host while a blue/green
 	// release is being tried. Empty means the preview host serves nothing.
 	Preview []Server
+
+	// PreviewToken is the live preview token: the one that sends a browser (by
+	// cookie) or a script (by header) to the servers in Preview on the main
+	// host. It is empty unless `release.preview.token` is set and Preview has
+	// servers. Treat it as a secret: never log it.
+	PreviewToken string `json:"-"`
 }
 
 // previewState is the preview servers as an upstream of their own, named

@@ -24,6 +24,9 @@ type NginxProvider struct {
 type NginxRoute struct {
 	Host        string
 	PreviewHost string `json:",omitempty"` // answers with the servers in `UpstreamState.Preview`
+	// PreviewLink is set when `release.preview.token` is set. The route then sends
+	// requests that carry `UpstreamState.PreviewToken` to `UpstreamState.Preview`.
+	PreviewLink bool `json:",omitempty"`
 	Path        string
 	SSLCert     string
 	SSLKey      string

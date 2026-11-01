@@ -60,9 +60,9 @@ type previewProbe struct {
 	seen *[]string
 }
 
-func (p *previewProbe) RunCheck(ctx context.Context, target ContainerInfo) (CheckResult, error) {
+func (p *previewProbe) RunCheck(ctx context.Context, target ContainerInfo, token string) (CheckResult, error) {
 	*p.seen = addrs(p.prov.configs[len(p.prov.configs)-1].Preview)
-	return p.fakeChecks.RunCheck(ctx, target)
+	return p.fakeChecks.RunCheck(ctx, target, token)
 }
 
 func TestFailedCheckTakesThePreviewAway(t *testing.T) {
@@ -100,5 +100,97 @@ func TestNoPreviewHostChangesNothing(t *testing.T) {
 	}
 	if len(prov.configs) != 3 {
 		t.Errorf("want the usual 3 configs, got %d", len(prov.configs))
+	}
+}
+
+// tokenProbe records, at the moment the check runs, the token the check got, the
+// token the proxy config carries and the token the state file shows.
+type tokenProbe struct {
+	prov  *mockProvider
+	mgr   *state.Manager
+	check string
+	proxy string
+	saved string
+}
+
+func (p *tokenProbe) RunCheck(_ context.Context, _ ContainerInfo, token string) (CheckResult, error) {
+	p.check = token
+	p.proxy = p.prov.configs[len(p.prov.configs)-1].PreviewToken
+	ds, _ := p.mgr.Load("app")
+	p.saved = ds.PreviewToken
+	return CheckResult{}, nil
+}
+
+func tokenDeployment(label string) *Deployment {
+	d := checkDeployment(config.CheckConfig{Command: "./smoke.sh", Timeout: time.Second})
+	d.Config.PreviewToken = label
+	return d
+}
+
+// A release with `auto` gets a fresh token each time. It reaches the check, the
+// proxy and the state file while green waits, and is gone from all three at the switch.
+func TestAutoTokenLivesOnlyWhileGreenWaits(t *testing.T) {
+	seen := map[string]bool{}
+	for range 2 {
+		d := tokenDeployment(config.PreviewTokenAuto)
+		prov := &mockProvider{}
+		mgr := state.NewManager(t.TempDir(), "")
+		probe := &tokenProbe{prov: prov, mgr: mgr}
+		d.Checks = probe
+
+		if err := NewBlueGreen(&mockDocker{}, prov, mgr).Execute(context.Background(), d); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(probe.check) < 32 || probe.proxy != probe.check || probe.saved != probe.check {
+			t.Fatalf("check, proxy and state must share one token, got %q / %q / %q", probe.check, probe.proxy, probe.saved)
+		}
+		seen[probe.check] = true
+		for i, c := range prov.configs[1:] {
+			if c.PreviewToken != "" || len(c.Preview) != 0 {
+				t.Errorf("config %d after the preview still has the token or its servers", i+1)
+			}
+		}
+		if ds, _ := mgr.Load("app"); ds.PreviewToken != "" || ds.PreviewURL != "" {
+			t.Errorf("the state file keeps the token after the switch: %+v", ds)
+		}
+	}
+	if len(seen) != 2 {
+		t.Errorf("every release needs its own token, got %v", seen)
+	}
+}
+
+func TestFixedTokenIsUsedAsGiven(t *testing.T) {
+	d := tokenDeployment("fixed-token-from-env-1234")
+	prov := &mockProvider{}
+	mgr := state.NewManager(t.TempDir(), "")
+	probe := &tokenProbe{prov: prov, mgr: mgr}
+	d.Checks = probe
+
+	if err := NewBlueGreen(&mockDocker{}, prov, mgr).Execute(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	if probe.check != "fixed-token-from-env-1234" || probe.proxy != probe.check {
+		t.Errorf("want the fixed token everywhere, got check %q proxy %q", probe.check, probe.proxy)
+	}
+}
+
+// A failed check withdraws the token with the preview, so the old link stops working.
+func TestFailedCheckWithdrawsTheToken(t *testing.T) {
+	d := tokenDeployment(config.PreviewTokenAuto)
+	d.Checks = &fakeChecks{result: CheckResult{ExitCode: 1, Output: "sign-up failed"}}
+	prov := &mockProvider{}
+	mgr := state.NewManager(t.TempDir(), "")
+
+	err := NewBlueGreen(&mockDocker{}, prov, mgr).Execute(context.Background(), d)
+
+	if !IsUndone(err) {
+		t.Fatalf("want an undone release, got %v", err)
+	}
+	if last := prov.configs[len(prov.configs)-1]; last.PreviewToken != "" || len(last.Preview) != 0 {
+		t.Error("the last config must not carry the token")
+	}
+	if ds, _ := mgr.Load("app"); ds.PreviewToken != "" {
+		t.Error("the state file keeps the token after the release was undone")
 	}
 }

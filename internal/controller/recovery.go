@@ -52,6 +52,7 @@ func (c *Controller) recoverService(ctx context.Context, project string, ds *sta
 	if !c.anyContainerRunning(ctx, ds.Containers.Canary) {
 		slog.Info("no live canary containers, resetting to idle", "component", "recovery", "service", key.deployKey())
 		ds.Status = state.StatusIdle
+		ds.PreviewToken, ds.PreviewURL = "", ""
 		ds.Containers.Canary = nil
 		if err := c.managerFor(project).Save(ds); err != nil {
 			slog.Error("error saving state", "component", "recovery", "service", key.deployKey(), "err", err)

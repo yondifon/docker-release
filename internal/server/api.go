@@ -28,6 +28,11 @@ type ServiceInfo struct {
 	InProgress           bool             `json:"in_progress"`
 	Stale                bool             `json:"stale"`
 	PendingCommands      []PendingCommand `json:"pending_commands,omitempty"`
+	// PreviewLink and PreviewToken let one browser or script try the new version
+	// while a release waits. They are sent only to a caller that signed in with
+	// the API token.
+	PreviewLink  string `json:"preview_link,omitempty"`
+	PreviewToken string `json:"preview_token,omitempty"`
 }
 
 // DeploymentStatus is the response for /api/deployments/{id}.
@@ -60,15 +65,27 @@ func (s *Server) apiMux() *http.ServeMux {
 // Config.APIToken is set. Comparison is constant-time.
 func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.APIToken != "" {
-			got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if !ok || subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.APIToken)) != 1 {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
+		if s.cfg.APIToken != "" && !s.signedIn(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
 		}
 		next(w, r)
 	}
+}
+
+// signedIn reports whether the request carries the API token. With no API
+// token configured, nobody is signed in.
+func (s *Server) signedIn(r *http.Request) bool {
+	got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return s.cfg.APIToken != "" && ok && subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.APIToken)) == 1
+}
+
+// showPreview adds the preview secrets to info for a signed-in caller.
+func (s *Server) showPreview(r *http.Request, info *ServiceInfo, ds *state.DeploymentState) {
+	if ds.Status != state.StatusInProgress || !s.signedIn(r) {
+		return
+	}
+	info.PreviewLink, info.PreviewToken = ds.PreviewLink(), ds.PreviewToken
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +100,9 @@ func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
 	}
 	active := s.ctrl.ActiveDeployments()
 	infos := buildServiceList(states, active, s.pendingCommandsByService(), s.project)
+	for i := range infos {
+		s.showPreview(r, &infos[i], states[i])
+	}
 	writeJSON(w, http.StatusOK, infos)
 }
 
@@ -102,6 +122,7 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	info := toServiceInfo(ds, inProgress, s.pendingCommandsByService()[name])
+	s.showPreview(r, &info, ds)
 	writeJSON(w, http.StatusOK, info)
 }
 

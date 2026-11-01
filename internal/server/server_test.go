@@ -363,3 +363,52 @@ func TestHandleServiceInvalidNameReturns404(t *testing.T) {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}
 }
+
+// The preview token is a way into the new version: only a caller with the API
+// token may read it, and nothing in the page or the other endpoints carries it.
+func TestPreviewLinkNeedsTheAPIToken(t *testing.T) {
+	dir := t.TempDir()
+	srv := newTestServer(dir, "proj")
+	srv.cfg.APIToken = "api-secret"
+	if err := state.NewManager(dir, "proj").Save(&state.DeploymentState{
+		Service: "web", Status: state.StatusInProgress, Strategy: "blue-green", ActiveDeploymentID: "deploy_abc",
+		PreviewToken: "preview-secret-1234", PreviewURL: "https://web.example.com/",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	get := func(path, auth string) string {
+		req := httptest.NewRequest("GET", path, nil)
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		rec := httptest.NewRecorder()
+		srv.apiMux().ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+
+	for _, path := range []string{"/api/services", "/api/services/web"} {
+		for name, auth := range map[string]string{"no token": "", "wrong token": "Bearer nope"} {
+			if body := get(path, auth); strings.Contains(body, "preview-secret") {
+				t.Errorf("%s with %s leaks the preview token: %s", path, name, body)
+			}
+		}
+		if body := get(path, "Bearer api-secret"); !strings.Contains(body, "https://web.example.com/?release-preview=preview-secret-1234") {
+			t.Errorf("%s with the API token should show the link: %s", path, body)
+		}
+	}
+	if body := get("/api/deployments/deploy_abc", "Bearer api-secret"); strings.Contains(body, "preview-secret") {
+		t.Errorf("the deployment endpoint must not show the token: %s", body)
+	}
+
+	web := httptest.NewRecorder()
+	srv.webMux().ServeHTTP(web, httptest.NewRequest("GET", "/partials/services", nil))
+	if strings.Contains(web.Body.String(), "preview-secret") {
+		t.Error("the web page leaks the preview token")
+	}
+
+	srv.cfg.APIToken = ""
+	if body := get("/api/services", ""); strings.Contains(body, "preview-secret") {
+		t.Errorf("with no API token set nobody is signed in, but the token showed: %s", body)
+	}
+}

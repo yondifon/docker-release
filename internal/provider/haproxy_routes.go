@@ -24,13 +24,16 @@ type HAProxyRoute struct {
 	// `PreviewBackend` it points at.
 	PreviewHost    string `json:",omitempty"`
 	PreviewBackend string `json:",omitempty"`
-	Path           string
-	TLSCert        string
-	TLSKey         string
-	TLSRedirect    bool
-	Backend        string
-	Affinity       string
-	TLSHash        string
+	// PreviewLink is set when `release.preview.token` is set. The route then sends
+	// requests that carry `UpstreamState.PreviewToken` to `UpstreamState.Preview`.
+	PreviewLink bool `json:",omitempty"`
+	Path        string
+	TLSCert     string
+	TLSKey      string
+	TLSRedirect bool
+	Backend     string
+	Affinity    string
+	TLSHash     string
 }
 
 func NewHAProxyRoutes(configDir string, route HAProxyRoute, dockerClient *docker.Client, serviceName, project string) *HAProxyProvider {

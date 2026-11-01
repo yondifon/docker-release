@@ -38,11 +38,3 @@ func TestPreviewHostCannotBeAnotherServicesHost(t *testing.T) {
 		t.Errorf("a different host must pass: %v", err)
 	}
 }
-
-func TestCheckGetsThePreviewURL(t *testing.T) {
-	for cert, want := range map[string]string{"": "http://next.example.com", "/certs/app.pem": "https://next.example.com"} {
-		if got := previewURL(&config.ServiceConfig{PreviewHost: "next.example.com", TLSCert: cert}); got != want {
-			t.Errorf("cert %q: got %s, want %s", cert, got, want)
-		}
-	}
-}
