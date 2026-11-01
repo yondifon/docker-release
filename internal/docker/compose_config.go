@@ -56,7 +56,16 @@ func (cfg *ComposeConfig) Project(project, service string, source ComposeProject
 	if !ok {
 		return ComposeProject{}, fmt.Errorf("service %q is missing from host Compose config", service)
 	}
-	if err := cfg.validateService(service, svc); err != nil {
+	var image string
+	_ = json.Unmarshal(svc["image"], &image)
+	if image == "" {
+		if build := svc["build"]; len(build) > 0 && string(build) != "null" && source.Available() == nil {
+			source.Name = project
+			return source, nil
+		}
+		return ComposeProject{}, fmt.Errorf("host Compose service %q requires an image; build the image on the host and set image before releasing", service)
+	}
+	if err := cfg.validateService(service, svc, source.WorkingDir); err != nil {
 		return ComposeProject{}, err
 	}
 	delete(svc, "build")
@@ -92,12 +101,7 @@ func (cfg *ComposeConfig) Project(project, service string, source ComposeProject
 	return source, nil
 }
 
-func (cfg *ComposeConfig) validateService(name string, svc map[string]json.RawMessage) error {
-	var image string
-	_ = json.Unmarshal(svc["image"], &image)
-	if image == "" {
-		return fmt.Errorf("host Compose service %q requires an image; build the image on the host and set image before releasing", name)
-	}
+func (cfg *ComposeConfig) validateService(name string, svc map[string]json.RawMessage, workingDir string) error {
 	if data := svc["env_file"]; len(data) > 0 && string(data) != "null" && string(data) != "[]" {
 		return fmt.Errorf("host Compose service %q has unresolved env files; resolve them with docker compose config", name)
 	}
@@ -114,6 +118,9 @@ func (cfg *ComposeConfig) validateService(name string, svc map[string]json.RawMe
 			key, value, _ = strings.Cut(option, ":")
 		}
 		if key == "seccomp" && value != "unconfined" && value != "builtin" {
+			if !filepath.IsAbs(value) {
+				value = filepath.Join(strings.ReplaceAll(workingDir, "$", "$$"), value)
+			}
 			if err := readableComposeFile(value); err != nil {
 				return err
 			}

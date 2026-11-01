@@ -8,6 +8,8 @@
 #
 # Usage: docker release [-f <compose-file>] <service>
 
+set -f
+
 if [ "$1" = "docker-cli-plugin-metadata" ]; then
   printf '{"SchemaVersion":"0.1.0","Vendor":"docker-release","ShortDescription":"Deployment controller for Docker Compose"}\n'
   exit 0
@@ -53,8 +55,8 @@ _dr_controller() {
 }
 
 _dr_compose_config() {
+  config_service=$1
   set -- compose
-  [ -z "$project" ] || set -- "$@" -p "$project"
   [ -z "$compose_workdir" ] || set -- "$@" --project-directory "$compose_workdir"
   old_ifs=$IFS
   IFS=,
@@ -65,7 +67,13 @@ _dr_compose_config() {
     set -- "$@" --env-file "$file"
   done
   IFS=$old_ifs
-  docker "$@" config --format json
+  set -- "$@" config --format json
+  [ -z "$config_service" ] || set -- "$@" "$config_service"
+  docker "$@"
+}
+
+_dr_model_project() {
+  printf '%s\n' "$model" | sed -n 's/^  "name": "\([a-z0-9_-]*\)",*$/\1/p'
 }
 
 sync_release=true
@@ -86,10 +94,9 @@ for arg in "$@"; do
   esac
 done
 
-project=${explicit_project:-$(_dr_project)}
-cid=$(_dr_controller)
-
 if [ "$sync_release" = true ]; then
+  service=$1
+  [ "$service" != release ] || service=$2
   compose_files=""
   compose_workdir=""
   compose_env_files=""
@@ -98,18 +105,20 @@ if [ "$sync_release" = true ]; then
     compose_files="$compose_workdir/$(basename "$compose_file")"
   fi
 
-  if [ -z "$cid" ]; then
-    # Compose resolves names from `.env` and interpolated `name:` fields.
-    project=$explicit_project
-    model=$(_dr_compose_config) || exit 1
-    project=$(printf '%s\n' "$model" | sed -n 's/^  "name": "\([a-z0-9_-]*\)",*$/\1/p')
-    if [ -z "$project" ]; then
-      echo "error: cannot determine project from docker compose config" >&2
-      exit 1
-    fi
-    cid=$(_dr_controller)
+  model=$(_dr_compose_config) || exit 1
+  project=$(_dr_model_project)
+  if [ -z "$project" ]; then
+    echo "error: cannot determine project from docker compose config" >&2
+    exit 1
   fi
+  # `--project` targets a service project, not the global controller's stack.
+  if [ -n "$explicit_project" ] && [ "$explicit_project" != "$project" ]; then
+    sync_release=false
+  fi
+else
+  project=$(_dr_project)
 fi
+cid=$(_dr_controller)
 
 if [ -z "$cid" ]; then
   echo "error: docker-release controller not running in project '${project}'" >&2
@@ -118,8 +127,6 @@ if [ -z "$cid" ]; then
 fi
 
 if [ "$sync_release" = true ]; then
-  service=$1
-  [ "$service" != release ] || service=$2
   source_cid=$(docker ps \
     --filter "label=com.docker.compose.project=${project}" \
     --filter "label=com.docker.compose.service=${service}" \
@@ -162,7 +169,11 @@ if [ "$sync_release" = true ]; then
     done
     IFS=$old_ifs
   fi
-  model=$(_dr_compose_config) || exit 1
+  model=$(_dr_compose_config "$service") || exit 1
+  if [ "$(_dr_model_project)" != "$project" ]; then
+    echo "error: saved Compose files select a different project; select the full file list with COMPOSE_FILE" >&2
+    exit 1
+  fi
   printf '%s\n' "$model" | docker exec -i \
     -e DR_COMPOSE_CONFIG_STDIN=1 \
     -e "DR_COMPOSE_CONFIG_WORKING_DIR=$compose_workdir" \
