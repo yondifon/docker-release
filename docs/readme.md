@@ -2,7 +2,7 @@
 
 ## Concepts
 
-`docker-release` runs as a service inside your Compose stack. It connects to the Docker socket and watches for deploy commands.
+`docker-release` runs as a service inside your Compose stack, alone or bundled with a proxy. It connects to the Docker socket and watches for deploy commands.
 
 When you run `docker release app`, it:
 
@@ -12,20 +12,22 @@ When you run `docker release app`, it:
 4. Drains old containers (waits for in-flight requests to finish)
 5. Stops old containers
 
-It never touches traffic directly. Your proxy — nginx-proxy, Nginx, Caddy, Traefik, HAProxy, or Angie — serves all requests.
+It never touches traffic directly. The proxy serves all requests: the one in your bundle, or one you run yourself (nginx-proxy, Nginx, Caddy, Traefik, HAProxy, or Angie).
 
 ## Images
 
+Start with a bundle: one `docker-release` service that runs your proxy and the controller together. Add `release.host` to an app and it is routed. Setup, labels, and TLS: [Bundled proxy images](bundled-images.md). The [README quick start](../README.md#quick-start) has a working file.
+
 | Image | Use |
 |---|---|
-| `malico/docker-release` | controller-only sidecar; bring your own proxy service |
-| `malico/docker-release-nginx` | Nginx + controller; [bundled setup](bundled-images.md) |
-| `malico/docker-release-angie` | Angie + controller; [bundled setup](bundled-images.md) |
-| `malico/docker-release-caddy` | Caddy + controller; [bundled setup](bundled-images.md) |
-| `malico/docker-release-haproxy` | HAProxy + controller; [bundled setup](bundled-images.md) |
-| `malico/docker-release-traefik` | Traefik + controller; [bundled setup](bundled-images.md) |
+| `malico/docker-release-nginx` | Nginx + controller |
+| `malico/docker-release-angie` | Angie + controller |
+| `malico/docker-release-caddy` | Caddy + controller, automatic HTTPS |
+| `malico/docker-release-haproxy` | HAProxy + controller |
+| `malico/docker-release-traefik` | Traefik + controller |
+| `malico/docker-release` | Controller only; for a proxy you already run, [global mode](global.md), or workers |
 
-All images support the same `docker release` commands. All five bundles use the same [Compose setup and routing labels](bundled-images.md); no separate proxy service or shared config volume is needed.
+All images support the same `docker release` commands.
 
 ## Deploy Strategies
 
@@ -162,20 +164,20 @@ volumes:
 
 ## Global Mode
 
-Run one controller-only `docker-release` instance as shared infra for all projects on a server. Bundles manage only their own Compose project.
+Run one controller-only `docker-release` instance with nginx-proxy as shared infra for all projects on a server. Bundles manage only their own Compose project.
 
 → [docs/global.md](./global.md)
 
 ## Provider Guides
 
-Each guide is self-contained. Open the one for your proxy and follow it end to end.
+Each guide opens with the bundled image for that proxy, then covers running the proxy as a separate service. Open the one for your proxy and follow it end to end.
 
 | Proxy | Guide |
 |---|---|
-| nginx-proxy | [providers/nginx-proxy.md](./providers/nginx-proxy.md) |
 | Nginx | [providers/nginx.md](./providers/nginx.md) |
 | Caddy | [providers/caddy.md](./providers/caddy.md) |
 | Traefik | [providers/traefik.md](./providers/traefik.md) |
 | Angie | [providers/angie.md](./providers/angie.md) |
 | HAProxy | [providers/haproxy.md](./providers/haproxy.md) |
+| nginx-proxy (separate service only) | [providers/nginx-proxy.md](./providers/nginx-proxy.md) |
 | No proxy | [providers/none.md](./providers/none.md) |

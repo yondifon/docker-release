@@ -2,11 +2,11 @@
 
 Use this when your app runs behind Traefik.
 
-Choose the bundle for one service with routing labels, or keep Traefik separate and manage your own routers.
+Start with the bundle: Traefik and `docker-release` in one service, with routes generated from app labels. Run Traefik yourself only when you already do, or need to control its whole config.
 
 ## Bundled image
 
-Use `malico/docker-release-traefik:<version>` with the [shared bundle setup](../bundled-images.md). Keep the same app labels, ports, and state mount as the other four bundles. You do not need `release.provider`, a Traefik config file, a separate proxy service, or a shared config volume.
+Use `malico/docker-release-traefik:<version>` in place of the image in the [quick start](../../README.md#quick-start). The [shared bundle setup](../bundled-images.md) lists the labels. You do not need `release.provider`, a Traefik config file, a separate proxy service, or a shared config volume.
 
 The bundle routes `release.host`, strips `release.path`, and supports the shared certificate, key, and HTTP 308 redirect labels. Traefik does not obtain or renew certificates in this setup. Mount certificates read-only and publish port 443 to add HTTPS.
 

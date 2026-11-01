@@ -2,11 +2,11 @@
 
 Use this when your app runs behind HAProxy.
 
-Choose the bundle for one service with routing labels, or keep HAProxy separate and manage your own frontend rules.
+Start with the bundle: HAProxy and `docker-release` in one service, with routes generated from app labels. Run HAProxy yourself only when you already do, or need to control its whole config.
 
 ## Bundled image
 
-Use `malico/docker-release-haproxy:<version>` with the [shared bundle setup](../bundled-images.md). Keep the same app labels, ports, and state mount as the other four bundles. You do not need `release.provider`, a HAProxy config file, or a shared config volume.
+Use `malico/docker-release-haproxy:<version>` in place of the image in the [quick start](../../README.md#quick-start). The [shared bundle setup](../bundled-images.md) lists the labels. You do not need `release.provider`, a HAProxy config file, or a shared config volume.
 
 The bundle routes each hostname and strips `release.path` before forwarding. Mounted certificates, separate private keys, and HTTP 308 redirects use the shared TLS labels. HAProxy does not obtain or renew certificates for you.
 

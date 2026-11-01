@@ -2,11 +2,11 @@
 
 Use this when your app runs behind Caddy.
 
-Choose the bundle for one service with routing labels, or keep Caddy separate and manage your own Caddyfile.
+Start with the bundle: Caddy and `docker-release` in one service, with routes generated from app labels. Run Caddy yourself only when you already do, or need to control its whole config.
 
 ## Bundled image
 
-Use `malico/docker-release-caddy:<version>` with the [shared bundle setup](../bundled-images.md). Keep the same app labels, ports, and state mount as the other four bundles. You do not need `release.provider`, a Caddyfile, or a shared config volume.
+Use `malico/docker-release-caddy:<version>` in place of the image in the [quick start](../../README.md#quick-start). The [shared bundle setup](../bundled-images.md) lists the labels. You do not need `release.provider`, a Caddyfile, or a shared config volume.
 
 HTTP works with the shared setup. To add automatic HTTPS, publish `443:443`, point your public hostname at the server, and allow inbound ports 80 and 443. Caddy obtains and renews certificates for `release.host`. HTTP remains available without a redirect. Mounted certificates and `release.tls.redirect` work as described in the shared setup.
 
