@@ -23,11 +23,15 @@ func (f *fakeChecks) RunCheck(_ context.Context, target ContainerInfo) (CheckRes
 	return f.result, f.err
 }
 
-type fakeRequests struct{ subscribers []func(accesslog.Entry) }
+type fakeRequests struct {
+	subscribers []func(accesslog.Entry)
+	lost        chan struct{}
+	err         error
+}
 
-func (f *fakeRequests) Subscribe(fn func(accesslog.Entry)) func() {
+func (f *fakeRequests) Subscribe(fn func(accesslog.Entry)) (func(), <-chan struct{}, error) {
 	f.subscribers = append(f.subscribers, fn)
-	return func() {}
+	return func() {}, f.lost, f.err
 }
 
 func (f *fakeRequests) publish(e accesslog.Entry) {
@@ -228,5 +232,39 @@ func TestCancelledWindowIsNotACleanFinish(t *testing.T) {
 	}
 	if _, stopped := docker.configsAtStop[d.Old[0].ID]; stopped {
 		t.Error("blue must keep running when the window is cut short")
+	}
+}
+
+func TestLostAccessLogRollsBack(t *testing.T) {
+	prov := &mockProvider{}
+	docker := &orderDocker{prov: prov, configsAtStop: map[string]int{}}
+	requests := &fakeRequests{lost: make(chan struct{})}
+	d := checkDeployment(errorRules())
+	d.Requests = requests
+	hooked := &reloadHook{mockProvider: prov, after: func(reloads int) {
+		if reloads == 1 {
+			close(requests.lost)
+		}
+	}}
+
+	err := NewBlueGreen(docker, hooked, state.NewManager(t.TempDir(), "")).Execute(context.Background(), d)
+
+	if !IsUndone(err) || !strings.Contains(err.Error(), "access log") {
+		t.Fatalf("a window nobody can watch must undo the release, got %v", err)
+	}
+	if _, stopped := docker.configsAtStop[d.Old[0].ID]; stopped {
+		t.Error("blue must keep running")
+	}
+}
+
+func TestNoAccessLogStopsTheReleaseBeforeTheSwitch(t *testing.T) {
+	prov := &mockProvider{}
+	d := checkDeployment(errorRules())
+	d.Requests = &fakeRequests{err: errors.New("no socket")}
+
+	err := NewBlueGreen(&mockDocker{}, prov, state.NewManager(t.TempDir(), "")).Execute(context.Background(), d)
+
+	if err == nil || len(prov.configs) != 0 {
+		t.Fatalf("want an error and an untouched proxy, got %v and %d configs", err, len(prov.configs))
 	}
 }

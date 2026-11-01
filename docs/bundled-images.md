@@ -79,6 +79,32 @@ Give each app a different host. For several paths on one host, mount your own pr
 
 Traefik uses sticky cookies for unweighted services even with `release.affinity: ip`; weighted groups use HRW. Its bundle uses only file-based routing, not `traefik.*` Docker labels. Other bundles keep their own affinity rules; see the provider guide before switching if your app relies on sticky sessions.
 
+## Release checks
+
+A bundle can watch real traffic after a blue/green release and undo it when users hit errors. This works because the proxy and the controller run in one container, so `docker-release` can read the proxy's access log. A separate proxy cannot do this.
+
+This example moves users to a new version, then watches sign-up for five minutes. One failed sign-up is allowed; a second sends users back to the old version.
+
+```yaml
+services:
+  app:
+    image: myapp:2.0
+    labels:
+      release.enable: "true"
+      release.host: app.example.com
+      release.strategy: blue-green
+      release.check.command: 'wget -qO- "$$RELEASE_TARGET/signup"'
+      release.check.paths: /signup
+      release.check.max_errors: "1"
+      release.check.window: 5m
+```
+
+Before users move, the command runs inside each new container. If it fails, users never reach the new version. After they move, every 5xx response on `/signup` from a new container counts as an error. The old containers keep running, without traffic, until the window ends cleanly. See [Release checks](readme.md#release-checks) for every label.
+
+`paths` match the path the client sent, before any `release.path` prefix is removed.
+
+The watch reads the access log lines the bundle writes. Each line now says which app container answered; the earlier fields stay. If you replace the bundle's proxy config with your own (`DR_PROXY_SKIP_CONFIG`), keep those lines, or the watch sees no errors. HAProxy writes them only for the frontend `docker-release` generates.
+
 ## Add TLS
 
 Nginx, Angie, HAProxy, and Traefik do not obtain or renew certificates for you. Use your certificate tool, mount its output read-only, and publish port 443. The same mounted-certificate setup works with all five bundles:

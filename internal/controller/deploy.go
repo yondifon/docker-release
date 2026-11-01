@@ -98,7 +98,7 @@ func (c *Controller) deploy(parentCtx context.Context, key serviceKey, cfg *conf
 		d.Checks = checkRunner{docker: c.docker, key: key, cfg: cfg}
 	}
 	if cfg.Check.Watch {
-		d.Requests = accesslog.Default
+		d.Requests = accesslog.Client{Path: accesslog.SocketPath}
 	}
 
 	deployCtx, deployCancel := context.WithCancel(ctx)

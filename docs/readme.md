@@ -54,6 +54,37 @@ release.bg.soak_time: 5m       # how long to keep old containers alive after tra
 release.bg.green_weight: 50    # traffic weight on new containers during soak (0-100)
 ```
 
+#### Release checks
+
+A container that passes its Docker health check can still fail at a task such as sign-up. Add `release.check.*` labels to say what a bad release means for your app. `docker-release` then acts before and after users move to the new version.
+
+```yaml
+release.check.command: "./smoke.sh"       # must pass before users move
+release.check.service: smoke              # optional: run it in this Compose service instead
+release.check.timeout: 2m
+release.check.fail_on: "5xx"              # statuses that count as errors, e.g. "5xx" or "502,504"
+release.check.paths: "/signup,/checkout"  # optional: count only paths that start with these
+release.check.max_errors: 1               # errors allowed in the window
+release.check.window: 5m                  # how long to watch after users move
+```
+
+**Before users move.** Once the new containers are healthy, the command runs once for each of them. It runs inside the new container, or, with `release.check.service`, in a one-off container of that Compose service on the same network. Create that service's container first with `docker compose create smoke`. The command runs with `sh -c` and gets two variables:
+
+| Variable | Value |
+|---|---|
+| `RELEASE_TARGET` | URL of the one new container being checked, such as `http://172.18.0.5:80` |
+| `RELEASE_HOST` | The route host from `release.host`, if you set one |
+
+Exit code 0 means go on. Any other exit code, or running past `release.check.timeout`, removes the new containers. Users stay on the old version, `docker release` exits with an error that includes the command's output, and `docker release status` shows the same output.
+
+**After users move.** When any of `fail_on`, `paths`, `max_errors`, or `window` is set, all users move to the new containers at once, and the old ones stay up with no traffic. `release.bg.green_weight` and `release.bg.soak_time` do not apply. For `window`, the proxy's access log is read, and every response from a new container that matches `fail_on` and `paths` counts as an error. When errors pass `max_errors`, users go back to the old containers at once and the new ones are removed. If the window ends with no more errors than that, the old containers are removed.
+
+Defaults: `fail_on` is `5xx`, `max_errors` is `0` (the first error rolls back), `window` is `5m`, and `timeout` is `2m`. Setting any one of these four labels turns the watch on.
+
+The error rules need a [bundled proxy image](bundled-images.md), because only a bundle lets `docker-release` read the access log. With a separate proxy, `release.check.command` still works, and the four error labels are rejected with a message when you start the release. Without any `release.check.*` label, blue/green works as before. These labels work only with `release.strategy: blue-green`.
+
+In a Compose file, write `$$RELEASE_TARGET` so Compose does not fill in the variable itself.
+
 ### Canary
 
 Sends a small percentage of traffic to new containers, then increases it in steps until the new version takes all traffic.
@@ -109,6 +140,13 @@ release.affinity: cookie  # sticky sessions (Angie, Caddy, HAProxy, Traefik only
 |---|---|---|
 | `release.bg.soak_time` | `5m` | Blue/green: how long to keep old containers alive after traffic shifts |
 | `release.bg.green_weight` | `50` | Blue/green: traffic weight on new containers during soak |
+| `release.check.command` | empty | Blue/green: a command that must exit 0 before users move; see [Release checks](#release-checks) |
+| `release.check.service` | empty | Blue/green: run the command in a one-off container of this Compose service |
+| `release.check.timeout` | `2m` | Blue/green: how long the command may run |
+| `release.check.fail_on` | `5xx` | Blue/green, bundled images: statuses that count as errors |
+| `release.check.paths` | all paths | Blue/green, bundled images: count only paths that start with one of these |
+| `release.check.max_errors` | `0` | Blue/green, bundled images: errors allowed in the window |
+| `release.check.window` | `5m` | Blue/green, bundled images: how long to watch after users move |
 | `release.canary.start_percentage` | `10` | Canary: initial traffic weight on new containers |
 | `release.canary.step` | `20` | Canary: weight added each interval |
 | `release.canary.interval` | `2m` | Canary: time between weight increases |

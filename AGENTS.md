@@ -154,6 +154,7 @@ docker release status
 | `Canary.StartPercentage` | `release.canary.start_percentage` | `10` |
 | `Canary.Step` | `release.canary.step` | `20` |
 | `Canary.Interval` | `release.canary.interval` | `2m` |
+| `Check.*` | `release.check.command`, `.service`, `.timeout`, `.fail_on`, `.paths`, `.max_errors`, `.window` | none (blue-green only; error rules need a bundled image) |
 
 ### `internal/provider`
 
@@ -182,6 +183,10 @@ Public methods on `*Controller`:
 - `Rollback(ctx, service)` — triggers rollback
 - `Status(ctx, service)` — prints state
 - `WaitDeployments()` — blocks until in-flight deploys settle
+
+### `internal/accesslog`
+
+Parsers and a hub for the bundled proxy's access log. The bundle supervisor copies the proxy's stdout through `accesslog.Tee`; blue-green subscribes to count errors per app container during `release.check.window`. Only bundles have this; a separate proxy has no log to read.
 
 ### `internal/state`
 
@@ -236,7 +241,7 @@ All strategies enable session affinity by default (`release.affinity: ip`). This
 Replaces containers one at a time: start new → wait healthy → add to upstream → mark old as draining → wait drain timeout → remove old. Repeats per replica.
 
 ### Blue/Green
-Spins up full replacement set → all healthy → atomic upstream switch → soak period → remove old. Rollback during soak: switch back instantly.
+Spins up full replacement set → all healthy → atomic upstream switch → soak period → remove old. Rollback during soak: switch back instantly. With `release.check.*`: run the check command on each green before the switch; with error rules, switch all traffic, keep blue idle for `window`, and roll back if green's errors pass `max_errors`.
 
 ### Canary
 Start subset of new containers → route `start_percentage` traffic → monitor for `interval` → increase by `step` → repeat until 100% → drain old. Auto-rollback if canary fails health checks.
