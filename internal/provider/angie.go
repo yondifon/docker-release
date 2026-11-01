@@ -38,7 +38,7 @@ func (p *AngieProvider) GenerateConfig(ctx context.Context, state *UpstreamState
 		return err
 	}
 
-	return writeConfigFile(filepath.Join(p.configDir, state.Service+".conf"), []byte(renderUpstreamFile("angie", state, p.previewHost)), "config")
+	return writeConfigFile(filepath.Join(p.configDir, state.Service+".conf"), []byte(renderUpstreamFile("angie", state, p.previewHost, false)), "config")
 }
 
 func (p *AngieProvider) Reload(ctx context.Context) error {
