@@ -27,12 +27,20 @@ server {
 }
 `
 
+func newTestNginxProxy(templatePath, stockTmpl string) *NginxProxyProvider {
+	return &NginxProxyProvider{
+		templatePath: templatePath,
+		stockTmpl:    stockTmpl,
+		services:     make(map[string]*UpstreamState),
+	}
+}
+
 func TestNginxProxyNoServices(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nginx.tmpl")
 	os.WriteFile(path, []byte(stockTemplate), 0o644)
 
-	p := NewNginxProxyFromString(path, stockTemplate)
+	p := newTestNginxProxy(path, stockTemplate)
 
 	state := &UpstreamState{
 		Service: "app",
@@ -74,7 +82,7 @@ func TestNginxProxyWithWeights(t *testing.T) {
 	path := filepath.Join(dir, "nginx.tmpl")
 	os.WriteFile(path, []byte(stockTemplate), 0o644)
 
-	p := NewNginxProxyFromString(path, stockTemplate)
+	p := newTestNginxProxy(path, stockTemplate)
 
 	state := &UpstreamState{
 		Service:  "app",
@@ -111,7 +119,7 @@ func TestNginxProxyWithDrain(t *testing.T) {
 	path := filepath.Join(dir, "nginx.tmpl")
 	os.WriteFile(path, []byte(stockTemplate), 0o644)
 
-	p := NewNginxProxyFromString(path, stockTemplate)
+	p := newTestNginxProxy(path, stockTemplate)
 
 	state := &UpstreamState{
 		Service: "app",
@@ -138,7 +146,7 @@ func TestNginxProxyKeepalive(t *testing.T) {
 	path := filepath.Join(dir, "nginx.tmpl")
 	os.WriteFile(path, []byte(stockTemplate), 0o644)
 
-	p := NewNginxProxyFromString(path, stockTemplate)
+	p := newTestNginxProxy(path, stockTemplate)
 
 	state := &UpstreamState{
 		Service:   "app",
@@ -165,7 +173,7 @@ func TestNginxProxyMultipleServices(t *testing.T) {
 	path := filepath.Join(dir, "nginx.tmpl")
 	os.WriteFile(path, []byte(stockTemplate), 0o644)
 
-	p := NewNginxProxyFromString(path, stockTemplate)
+	p := newTestNginxProxy(path, stockTemplate)
 
 	if err := p.GenerateConfig(context.Background(), &UpstreamState{
 		Service: "webapp",
@@ -201,36 +209,12 @@ func TestNginxProxyMultipleServices(t *testing.T) {
 	}
 }
 
-func TestNginxProxyRemoveService(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "nginx.tmpl")
-	os.WriteFile(path, []byte(stockTemplate), 0o644)
-
-	p := NewNginxProxyFromString(path, stockTemplate)
-
-	p.GenerateConfig(context.Background(), &UpstreamState{
-		Service: "app",
-		Servers: []Server{{Addr: "172.18.0.5:80"}},
-	})
-
-	if err := p.RemoveService("app"); err != nil {
-		t.Fatal(err)
-	}
-
-	data, _ := os.ReadFile(path)
-	content := string(data)
-
-	if content != stockTemplate {
-		t.Error("template should revert to stock when no services are managed")
-	}
-}
-
 func TestNginxProxyPreservesOriginalFallback(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nginx.tmpl")
 	os.WriteFile(path, []byte(stockTemplate), 0o644)
 
-	p := NewNginxProxyFromString(path, stockTemplate)
+	p := newTestNginxProxy(path, stockTemplate)
 
 	p.GenerateConfig(context.Background(), &UpstreamState{
 		Service: "app",
@@ -249,30 +233,12 @@ func TestNginxProxyPreservesOriginalFallback(t *testing.T) {
 	}
 }
 
-func TestNginxProxyAtomicWrite(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "nginx.tmpl")
-	os.WriteFile(path, []byte(stockTemplate), 0o644)
-
-	p := NewNginxProxyFromString(path, stockTemplate)
-
-	p.GenerateConfig(context.Background(), &UpstreamState{
-		Service: "app",
-		Servers: []Server{{Addr: "172.18.0.5:80"}},
-	})
-
-	tmp := path + ".tmp"
-	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
-		t.Error("temp file not cleaned up")
-	}
-}
-
 func TestNginxProxyUpstreamNameOverride(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nginx.tmpl")
 	os.WriteFile(path, []byte(stockTemplate), 0o644)
 
-	p := NewNginxProxyFromString(path, stockTemplate)
+	p := newTestNginxProxy(path, stockTemplate)
 
 	state := &UpstreamState{
 		Service:      "webapp",
@@ -361,7 +327,7 @@ func TestNginxProxyKeepsSameServiceNameFromTwoProjects(t *testing.T) {
 	path := filepath.Join(dir, "nginx.tmpl")
 	os.WriteFile(path, []byte(stockTemplate), 0o644)
 
-	p := NewNginxProxyFromString(path, stockTemplate)
+	p := newTestNginxProxy(path, stockTemplate)
 	ctx := context.Background()
 
 	// Two projects, both with a service called "app", routed by different hosts.

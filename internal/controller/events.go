@@ -98,22 +98,14 @@ func (c *Controller) handleStart(ctx context.Context, containerID string, attrs 
 
 	serviceContainers := filterServiceContainers(containers, key)
 
-	if len(serviceContainers) < 2 {
-		c.refreshServiceConfig(ctx, key)
-		c.refreshServiceConfigAfter(ctx, key, 2*time.Second)
-		return
+	// Without an old and a new revision there is nothing to deploy, so only
+	// the proxy config needs a refresh.
+	var old, new []types.Container
+	if len(serviceContainers) >= 2 {
+		if revisions := groupByRevision(serviceContainers); len(revisions) >= 2 {
+			old, new = separateByRevision(serviceContainers, revisions, containerID)
+		}
 	}
-
-	revisions := groupByRevision(serviceContainers)
-
-	if len(revisions) < 2 {
-		c.refreshServiceConfig(ctx, key)
-		c.refreshServiceConfigAfter(ctx, key, 2*time.Second)
-		return
-	}
-
-	old, new := separateByRevision(serviceContainers, revisions, containerID)
-
 	if len(old) == 0 || len(new) == 0 {
 		c.refreshServiceConfig(ctx, key)
 		c.refreshServiceConfigAfter(ctx, key, 2*time.Second)

@@ -201,4 +201,4 @@ release.bg.green_weight: 50
 | Traefik routes to the Docker service directly | Set the router service to `app@file`, not `app` |
 | Dynamic config does not load | Check the shared volume is mounted to `/etc/traefik/dynamic` |
 | File provider not enabled | Add `--providers.file.directory` and `--providers.file.watch=true` to Traefik command |
-| Rollback state lost on restart | Mount `/var/lib/docker-release` to a named volume |
+| Rollback state lost after `docker compose down` | Mount `/var/lib/docker-release` to a named volume |

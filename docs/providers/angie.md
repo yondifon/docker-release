@@ -207,4 +207,4 @@ release.bg.green_weight: 50
 | Angie cannot find upstream files | Check the mount path — many Angie images use `/etc/angie/http.d`, not `/etc/nginx/conf.d` |
 | Reload does not run | Set `release.angie.service` to your Angie Compose service name |
 | Sticky sessions not working | Set `release.affinity: cookie` |
-| Rollback state lost on restart | Mount `/var/lib/docker-release` to a named volume |
+| Rollback state lost after `docker compose down` | Mount `/var/lib/docker-release` to a named volume |

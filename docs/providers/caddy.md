@@ -10,7 +10,7 @@ Use `malico/docker-release-caddy:<version>` in place of the image in the [quick 
 
 HTTP works with the shared setup. To add automatic HTTPS, publish `443:443`, point your public hostname at the server, and allow inbound ports 80 and 443. Caddy obtains and renews certificates for `release.host`. HTTP remains available without a redirect. Mounted certificates and `release.tls.redirect` work as described in the shared setup.
 
-Keep the `/var/lib/docker-release` volume: Caddy stores certificates and its local CA under `/var/lib/docker-release/caddy`. Deleting it loses this data as well as rollback history.
+Mount a named volume at `/var/lib/docker-release` ([Keep state](../bundled-images.md#keep-state)). Caddy stores certificates and its local CA under `/var/lib/docker-release/caddy`. Deleting the volume loses them as well as rollback history.
 
 Do not publish Caddy's admin port, 2019.
 
@@ -184,6 +184,6 @@ release.bg.green_weight: 50
 |---|---|
 | Caddy does not route to the app | Check `import /etc/caddy/conf.d/*.caddy` is at the top of your Caddyfile |
 | Reload does not run | Set `release.caddy.service` to your Caddy Compose service name |
-| Rollback state lost on restart | Mount `/var/lib/docker-release` to a named volume |
-| Bundled certificates lost on restart | Keep the same `/var/lib/docker-release` volume when recreating the bundle |
+| Rollback state lost after `docker compose down` | Mount `/var/lib/docker-release` to a named volume |
+| Bundled certificates lost after `docker compose down` | Mount `/var/lib/docker-release` to a named volume and keep it when recreating the bundle |
 | Local HTTPS certificate is not trusted | Export Caddy's local CA root and pass it to your client; do not disable certificate checks |

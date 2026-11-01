@@ -16,7 +16,7 @@ import (
 const reloadDrainTime = 250 * time.Millisecond
 
 func confirmBundledReload(ctx context.Context, name string, reload func() error) error {
-	if !strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), name) {
+	if !bundledProxy(name) {
 		return reload()
 	}
 	data, err := os.ReadFile("/run/docker-release/" + name + ".started")

@@ -148,6 +148,12 @@ func defaultProvider() string {
 	return "nginx-proxy"
 }
 
+// BundledProxy returns the lower-case name in `DR_BUNDLED_PROXY`, or "" when
+// no proxy is bundled into this controller.
+func BundledProxy() string {
+	return strings.ToLower(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")))
+}
+
 func routeLabel(labels map[string]string, name, nginxAlias string) string {
 	if value, ok := labels["release."+name]; ok {
 		return value
@@ -172,7 +178,7 @@ func applyProviderDefaults(cfg *ServiceConfig) {
 		if cfg.AngieConfigDir == "" {
 			cfg.AngieConfigDir = "/shared/angie-config"
 		}
-		if cfg.AngieRouteDir == "" && strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "angie") {
+		if cfg.AngieRouteDir == "" && BundledProxy() == "angie" {
 			cfg.AngieRouteDir = "/shared/angie-routes"
 		}
 	case ProviderCaddy:

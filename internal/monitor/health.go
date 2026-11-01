@@ -36,14 +36,6 @@ func NewHealthMonitor(checker HealthChecker, containerIDs []string, onUnhealthy 
 	}
 }
 
-func (m *HealthMonitor) SetInterval(d time.Duration) {
-	m.interval = d
-}
-
-func (m *HealthMonitor) SetMaxRestarts(n int) {
-	m.maxRestarts = n
-}
-
 func (m *HealthMonitor) SetGracePeriod(d time.Duration) {
 	m.gracePeriod = d
 }

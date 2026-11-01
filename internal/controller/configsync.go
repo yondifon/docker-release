@@ -189,9 +189,6 @@ func (c *Controller) generateServiceConfig(ctx context.Context, key serviceKey, 
 			Service:      key.service,
 			UpstreamName: cfg.UpstreamName,
 		}
-	}
-
-	if !ok {
 		addrs := c.addrResolver(ctx, cfg)
 		for _, ctr := range containers {
 			addr, err := addrs.ContainerAddr(ctx, ctr.ID)

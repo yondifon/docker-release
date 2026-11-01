@@ -97,14 +97,9 @@ func (c *Controller) deploy(parentCtx context.Context, key serviceKey, cfg *conf
 	deployCtx, deployCancel := context.WithCancel(ctx)
 	defer deployCancel()
 
-	newIDs := make([]string, len(newInfos))
-	for i, info := range newInfos {
-		newIDs[i] = info.ID
-	}
-
 	strat := strategy.New(cfg, c.docker, prov, mgr)
 
-	mon := monitor.NewHealthMonitor(c.docker, newIDs, func(containerID, reason string) {
+	mon := monitor.NewHealthMonitor(c.docker, containerInfoIDs(newInfos), func(containerID, reason string) {
 		slog.Warn("auto-rollback triggered", "component", "controller", "service", dKey, "reason", reason)
 		deployCancel()
 	})

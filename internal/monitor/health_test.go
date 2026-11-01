@@ -64,7 +64,7 @@ func TestMonitorDetectsUnhealthy(t *testing.T) {
 		triggerReason = reason
 		mu.Unlock()
 	})
-	mon.SetInterval(10 * time.Millisecond)
+	mon.interval = 10 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -101,8 +101,7 @@ func TestMonitorDetectsRestarts(t *testing.T) {
 		triggered = id
 		mu.Unlock()
 	})
-	mon.SetInterval(10 * time.Millisecond)
-	mon.SetMaxRestarts(3)
+	mon.interval = 10 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -132,7 +131,7 @@ func TestMonitorNoFalseAlarm(t *testing.T) {
 	mon := NewHealthMonitor(checker, []string{"container_abc123"}, func(id, reason string) {
 		triggered = true
 	})
-	mon.SetInterval(10 * time.Millisecond)
+	mon.interval = 10 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
 	defer cancel()
@@ -158,7 +157,7 @@ func TestMonitorMultipleContainers(t *testing.T) {
 		triggered = id
 		mu.Unlock()
 	})
-	mon.SetInterval(10 * time.Millisecond)
+	mon.interval = 10 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -188,8 +187,7 @@ func TestMonitorInitialRestartBaseline(t *testing.T) {
 	mon := NewHealthMonitor(checker, []string{"container_abc123"}, func(id, reason string) {
 		triggered = true
 	})
-	mon.SetInterval(10 * time.Millisecond)
-	mon.SetMaxRestarts(3)
+	mon.interval = 10 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
 	defer cancel()
