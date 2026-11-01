@@ -367,7 +367,7 @@ def diagnostics(stack):
 
 
 def prepare(mode):
-    (HERE / ".env").unlink(missing_ok=True)
+    (HERE / ".env").write_text("TAG=latest\n")
     (HERE / "bind").mkdir(exist_ok=True)
     (HERE / "bind" / "marker").write_text("bind-ok\n")
     if mode in ("host", "host-options"):
@@ -376,7 +376,7 @@ def prepare(mode):
         (HOST_TMP / "host $ files" / "marker").write_text("host-path-ok\n")
         (HOST_TMP / "app values.env").write_text("ENV_FILE_LITERAL='env $cash and ${HOME}'\n")
     if mode == "host-options":
-        (HERE / ".env").write_text("FROM_COMPOSE=wrong-default\nTAG=wrong-default\n")
+        (HERE / ".env").write_text("FROM_COMPOSE=wrong-default\n")
         (HOST_TMP / "explicit.env").write_text("FROM_COMPOSE=one\nTAG=latest\nOVERLAY_VALUE=overlay-one\n")
 
 
