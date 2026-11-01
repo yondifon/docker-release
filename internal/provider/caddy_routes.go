@@ -88,23 +88,30 @@ func renderCaddySite(route CaddyRoute, hosts, body string) string {
 		httpHosts = append(httpHosts, "http://"+host)
 		httpsHosts = append(httpsHosts, "https://"+host)
 	}
-	var b strings.Builder
-	if route.TLSRedirect {
-		fmt.Fprintf(&b, "\n%s {\n    redir https://{host}{uri} 308\n}\n", strings.Join(httpHosts, ", "))
-	} else {
-		httpsHosts = append(httpHosts, httpsHosts...)
-	}
-	fmt.Fprintf(&b, "\n%s {\n", strings.Join(httpsHosts, ", "))
+	accessLog := caddyAccessLog
 	if route.PreviewLink {
-		b.WriteString(caddyLinkAccessLog)
-	} else {
-		b.WriteString(caddyAccessLog)
+		accessLog = caddyLinkAccessLog
 	}
-	if route.TLSCert != "" {
-		fmt.Fprintf(&b, "    tls %s %s\n", route.TLSCert, route.TLSKey)
+	var b strings.Builder
+	block := func(addresses []string, tls bool) {
+		fmt.Fprintf(&b, "\n%s {\n%s", strings.Join(addresses, ", "), accessLog)
+		if tls {
+			fmt.Fprintf(&b, "    tls %s %s\n", route.TLSCert, route.TLSKey)
+		}
+		b.WriteString(body)
+		b.WriteString("}\n")
 	}
-	b.WriteString(body)
-	b.WriteString("}\n")
+	switch {
+	case route.TLSRedirect:
+		fmt.Fprintf(&b, "\n%s {\n    redir https://{host}{uri} 308\n}\n", strings.Join(httpHosts, ", "))
+		block(httpsHosts, route.TLSCert != "")
+	case route.TLSCert != "":
+		// Caddy refuses `tls` in a block that also listens on HTTP.
+		block(httpHosts, false)
+		block(httpsHosts, true)
+	default:
+		block(append(httpHosts, httpsHosts...), false)
+	}
 	return b.String()
 }
 
