@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/malico/docker-release/internal/accesslog"
 )
 
 func TestBundledProcess(t *testing.T) {
@@ -23,6 +26,9 @@ func TestBundledProcess(t *testing.T) {
 	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGUSR1)
+	if line := os.Getenv("DR_TEST_PROXY_LINE"); line != "" {
+		fmt.Println(line)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "listening"), nil, 0o600); err != nil {
 		os.Exit(2)
 	}
@@ -127,5 +133,42 @@ func TestBundledProxyExitStopsController(t *testing.T) {
 	case <-done:
 	default:
 		t.Fatal("proxy died but controller was still running")
+	}
+}
+
+func TestBundledProxyAccessLogReachesHub(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DR_TEST_PROXY_DIR", dir)
+	t.Setenv("DR_TEST_PROXY_LINE", `192.168.65.1 - - [01/Nov/2026:13:28:48 +0000] "GET /hello?x=1 HTTP/1.1" 502 5 "-" "curl" "-" drlog status=502 upstream="172.20.0.4:80" host="linear.localhost" path="/hello?x=1"`)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := make(chan accesslog.Entry, 1)
+	defer accesslog.Default.Subscribe(func(e accesslog.Entry) { entries <- e })()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	proxy := &bundledProxy{name: "nginx", args: []string{executable, "-test.run=^TestBundledProcess$"}}
+	err = superviseBundledProxy(ctx, proxy, func(ctx context.Context) error {
+		<-ctx.Done()
+		return os.WriteFile(filepath.Join(dir, "controller-stopped"), nil, 0o600)
+	}, func() bool { return true }, func(context.Context) bool {
+		_, err := os.Stat(filepath.Join(dir, "listening"))
+		return err == nil
+	}, func(context.Context) error {
+		cancel()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := accesslog.Entry{Status: 502, Upstream: "172.20.0.4:80", Host: "linear.localhost", Path: "/hello"}
+	select {
+	case got := <-entries:
+		if got != want {
+			t.Fatalf("got %+v, want %+v", got, want)
+		}
+	default:
+		t.Fatal("the proxy's access log line did not reach the hub")
 	}
 }

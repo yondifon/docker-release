@@ -51,12 +51,7 @@ func main() {
 			printUsage()
 			return
 		}
-		opts, err := parseReleaseOptions(os.Args[3:])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		requireProjectInGlobalMode(opts.project)
+		opts := mustParseReleaseOptions(os.Args[3:])
 		run(opts.project, func(ctrl *controller.Controller) error {
 			return runRelease(ctrl, opts.project, os.Args[2], opts)
 		})
@@ -69,12 +64,7 @@ func main() {
 			printUsage()
 			return
 		}
-		opts, err := parseReleaseOptions(os.Args[3:])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		requireProjectInGlobalMode(opts.project)
+		opts := mustParseReleaseOptions(os.Args[3:])
 		run(opts.project, func(ctrl *controller.Controller) error {
 			return ctrl.Rollback(context.Background(), opts.project, os.Args[2])
 		})
@@ -83,12 +73,7 @@ func main() {
 			printUsage()
 			return
 		}
-		opts, err := parseReleaseOptions(os.Args[2:])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		requireProjectInGlobalMode(opts.project)
+		opts := mustParseReleaseOptions(os.Args[2:])
 		run(opts.project, func(ctrl *controller.Controller) error {
 			return ctrl.Status(context.Background(), opts.project, opts.service)
 		})
@@ -109,12 +94,7 @@ func main() {
 			printUsage()
 			os.Exit(1)
 		}
-		opts, err := parseReleaseOptions(os.Args[2:])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		requireProjectInGlobalMode(opts.project)
+		opts := mustParseReleaseOptions(os.Args[2:])
 		run(opts.project, func(ctrl *controller.Controller) error {
 			return runRelease(ctrl, opts.project, os.Args[1], opts)
 		})
@@ -175,20 +155,58 @@ func parseReleaseOptions(args []string) (releaseOptions, error) {
 	return opts, nil
 }
 
+// mustParseReleaseOptions parses args and exits on a bad option or on a
+// missing project in global mode.
+func mustParseReleaseOptions(args []string) releaseOptions {
+	opts, err := parseReleaseOptions(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	requireProjectInGlobalMode(opts.project)
+	return opts
+}
+
 func runRelease(ctrl *controller.Controller, project, service string, opts releaseOptions) error {
 	if opts.detach {
 		return ctrl.EnqueueRelease(project, service, opts.force)
+	}
+	var composeConfig *docker.ComposeConfig
+	if os.Getenv("DR_COMPOSE_CONFIG_STDIN") == "1" {
+		var err error
+		composeConfig, err = docker.ReadComposeConfig(os.Stdin)
+		if err != nil {
+			return err
+		}
+		composeConfig.Source = docker.ComposeProject{
+			WorkingDir:  os.Getenv("DR_COMPOSE_CONFIG_WORKING_DIR"),
+			ConfigFiles: splitComposePaths(os.Getenv("DR_COMPOSE_CONFIG_FILES")),
+			EnvFiles:    splitComposePaths(os.Getenv("DR_COMPOSE_CONFIG_ENV_FILES")),
+		}
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if err := ctrl.Release(ctx, project, service, opts.force); err != nil {
+	var err error
+	if composeConfig != nil {
+		err = ctrl.ReleaseWithComposeConfig(ctx, project, service, opts.force, composeConfig)
+	} else {
+		err = ctrl.Release(ctx, project, service, opts.force)
+	}
+	if err != nil {
 		return err
 	}
 
 	ctrl.WaitDeployments()
-	return nil
+	return ctrl.ReleaseFailure(project, service)
+}
+
+func splitComposePaths(value string) []string {
+	if value == "" {
+		return nil
+	}
+	return strings.Split(value, ",")
 }
 
 // run resolves the compose project and creates the controller, then calls fn.

@@ -20,13 +20,45 @@ The [quick start](../README.md#quick-start) has the complete Compose file. To us
 
 Run `docker compose up -d`. Point the hostname at your server. The bundle and apps must share a Docker network, which Compose gives them by default. Requests go to your app's lowest exposed port, or port 80 if none is exposed. Expose only its HTTP port. Do not publish app ports just for routing.
 
-The Docker socket lets docker-release manage containers and grants control of the Docker host. Use bundles only with trusted services. The state volume keeps rollback history when you recreate the bundle. In Caddy, it also keeps certificates and the local certificate authority. Keep this volume when upgrading. Generated proxy files stay inside the bundle and are recreated from app labels.
+The Docker socket lets docker-release manage containers and grants control of the Docker host. Use bundles only with trusted services. Generated proxy files stay inside the bundle and are recreated from app labels.
 
 No environment variables, `release.provider` label, proxy service name, or health check override is needed. The image supplies its own health check. It becomes healthy when routing is ready and the proxy accepts HTTP requests.
 
 Deploy with `docker release app` from the [host command](../README.md#install-cli). Keep a health check that proves each app can serve requests.
 
 Caddy, HAProxy, and Traefik app releases keep existing client connections open. Changes to hostnames, routes, or TLS settings can close idle connections; apply those changes during a maintenance window.
+
+## Keep state
+
+The bundle keeps rollback history in `/var/lib/docker-release`. Caddy also keeps its certificates and local certificate authority there. The image gives this folder its own volume, so your data survives `docker compose restart` and `docker compose up -d` after an image change.
+
+`docker compose down` starts you over with an empty volume. To keep your data through `down`, and always with Caddy, name the volume:
+
+```yaml
+services:
+  docker-release:
+    volumes:
+      - docker-release-state:/var/lib/docker-release
+
+volumes:
+  docker-release-state:
+```
+
+Keep this volume when you upgrade.
+
+## Stop time
+
+Compose waits 10 seconds for a service to stop, and an idle bundle stops well inside that. If requests can stay open longer, set `stop_grace_period: 90s` on the service so they can finish.
+
+## Project mount
+
+For apps with a prebuilt `image`, `docker release app` needs no project mount unless the app uses the file-backed dependencies below. The host command resolves your Compose configuration on the host and sends it to the controller over stdin, so Compose file changes apply. Run it from the project directory, or use `docker release -f /path/to/compose.yml app` from another folder. The host needs the Docker Compose plugin (`docker compose`), which is included in most Docker installations.
+
+Update the host CLI plugin and controller image together. An existing `.:${PWD}:ro` project mount remains supported; you can keep it or remove it.
+
+Services with only `build` and no `image` still need the existing project mount. App bind mounts and `env_file` work without a project mount. File-backed Compose configs, secrets, and custom seccomp profiles still need their files readable at matching paths inside the controller. For these dependencies, keep an existing optional project mount, or replace it with read-only mounts of only the needed files at matching paths.
+
+Direct controller commands and API, web, or queued detached releases without readable project files copy running containers and do not pick up Compose file changes.
 
 ## Project mount
 
@@ -52,6 +84,32 @@ Without it, the bundle copies the running container: the new image's settings ap
 Give each app a different host. For several paths on one host, mount your own proxy config instead. Without a host, a path adds a route to the default HTTP server; `/health` is reserved. For example, `/app/orders` at path `/app/` reaches your app as `/orders`.
 
 Traefik uses sticky cookies for unweighted services even with `release.affinity: ip`; weighted groups use HRW. Its bundle uses only file-based routing, not `traefik.*` Docker labels. Other bundles keep their own affinity rules; see the provider guide before switching if your app relies on sticky sessions.
+
+## Release checks
+
+A bundle can watch real traffic after a blue/green release and undo it when users hit errors. This works because the proxy and the controller run in one container, so `docker-release` can read the proxy's access log. A separate proxy cannot do this.
+
+This example moves users to a new version, then watches sign-up for five minutes. One failed sign-up is allowed; a second sends users back to the old version.
+
+```yaml
+services:
+  app:
+    image: myapp:2.0
+    labels:
+      release.enable: "true"
+      release.host: app.example.com
+      release.strategy: blue-green
+      release.check.command: 'wget -qO- "$$RELEASE_TARGET/signup"'
+      release.check.paths: /signup
+      release.check.max_errors: "1"
+      release.check.window: 5m
+```
+
+Before users move, the command runs inside each new container. If it fails, users never reach the new version. After they move, every 5xx response on `/signup` from a new container counts as an error. The old containers keep running, without traffic, until the window ends cleanly. See [Release checks](readme.md#release-checks) for every label.
+
+`paths` match the path the client sent, before any `release.path` prefix is removed.
+
+The watch reads the access log lines the bundle writes. Each line now says which app container answered; the earlier fields stay. If you replace the bundle's proxy config with your own (`DR_PROXY_SKIP_CONFIG`), keep those lines, or the watch sees no errors. HAProxy writes them only for the frontend `docker-release` generates.
 
 ## Add TLS
 

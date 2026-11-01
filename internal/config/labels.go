@@ -70,6 +70,7 @@ type ServiceConfig struct {
 
 	BlueGreen BlueGreenConfig
 	Canary    CanaryConfig
+	Check     CheckConfig
 }
 
 type BlueGreenConfig struct {
@@ -88,6 +89,11 @@ func ParseLabels(labels map[string]string) (*ServiceConfig, error) {
 		return nil, fmt.Errorf("release.enable is not true")
 	}
 	redirect, err := parseRouteRedirect(routeLabel(labels, "tls.redirect", "ssl.redirect"))
+	if err != nil {
+		return nil, err
+	}
+
+	check, err := parseCheck(labels)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +136,7 @@ func ParseLabels(labels map[string]string) (*ServiceConfig, error) {
 			Step:            parseIntOr(labels, "release.canary.step", 20),
 			Interval:        parseDurationOr(labels, "release.canary.interval", 2*time.Minute),
 		},
+		Check: check,
 	}
 
 	applyProviderDefaults(cfg)
@@ -146,6 +153,12 @@ func defaultProvider() string {
 		return provider
 	}
 	return "nginx-proxy"
+}
+
+// BundledProxy returns the lower-case name in `DR_BUNDLED_PROXY`, or "" when
+// no proxy is bundled into this controller.
+func BundledProxy() string {
+	return strings.ToLower(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")))
 }
 
 func routeLabel(labels map[string]string, name, nginxAlias string) string {
@@ -172,7 +185,7 @@ func applyProviderDefaults(cfg *ServiceConfig) {
 		if cfg.AngieConfigDir == "" {
 			cfg.AngieConfigDir = "/shared/angie-config"
 		}
-		if cfg.AngieRouteDir == "" && strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "angie") {
+		if cfg.AngieRouteDir == "" && BundledProxy() == "angie" {
 			cfg.AngieRouteDir = "/shared/angie-routes"
 		}
 	case ProviderCaddy:
@@ -223,6 +236,10 @@ func (c *ServiceConfig) validate() error {
 
 	if c.BlueGreen.GreenWeight < 1 || c.BlueGreen.GreenWeight > 100 {
 		return fmt.Errorf("bg.green_weight must be 1-100, got %d", c.BlueGreen.GreenWeight)
+	}
+
+	if err := c.validateCheck(); err != nil {
+		return err
 	}
 
 	if c.NginxKeepalive < -1 {

@@ -154,6 +154,7 @@ docker release status
 | `Canary.StartPercentage` | `release.canary.start_percentage` | `10` |
 | `Canary.Step` | `release.canary.step` | `20` |
 | `Canary.Interval` | `release.canary.interval` | `2m` |
+| `Check.*` | `release.check.command`, `.service`, `.timeout`, `.fail_on`, `.paths`, `.max_errors`, `.window` | none (blue-green only; error rules need a bundled image) |
 
 ### `internal/provider`
 
@@ -182,6 +183,10 @@ Public methods on `*Controller`:
 - `Rollback(ctx, service)` — triggers rollback
 - `Status(ctx, service)` — prints state
 - `WaitDeployments()` — blocks until in-flight deploys settle
+
+### `internal/accesslog`
+
+Parsers and a hub for the bundled proxy's access log. The bundle supervisor copies the proxy's stdout through `accesslog.Tee`; blue-green subscribes to count errors per app container during `release.check.window`. Only bundles have this; a separate proxy has no log to read.
 
 ### `internal/state`
 
@@ -236,7 +241,7 @@ All strategies enable session affinity by default (`release.affinity: ip`). This
 Replaces containers one at a time: start new → wait healthy → add to upstream → mark old as draining → wait drain timeout → remove old. Repeats per replica.
 
 ### Blue/Green
-Spins up full replacement set → all healthy → atomic upstream switch → soak period → remove old. Rollback during soak: switch back instantly.
+Spins up full replacement set → all healthy → atomic upstream switch → soak period → remove old. Rollback during soak: switch back instantly. With `release.check.*`: run the check command on each green before the switch; with error rules, switch all traffic, keep blue idle for `window`, and roll back if green's errors pass `max_errors`.
 
 ### Canary
 Start subset of new containers → route `start_percentage` traffic → monitor for `interval` → increase by `step` → repeat until 100% → drain old. Auto-rollback if canary fails health checks.
@@ -280,7 +285,7 @@ docker ps \
 - **`scripts/docker-release` is the only host command.** There is no `dr` standalone binary for the host. On the host: `docker release`. Inside the container: `dr`.
 - **Do not add subcommands to the binary without updating the reserved-word list** in `main.go`'s `default:` branch comment and `printUsage()`.
 - **Provider config is written to a shared volume, never to the proxy container's filesystem directly.** The proxy mounts the volume read-only.
-- **State is persisted to `/var/lib/docker-release`.** Mount a Docker volume there in production to survive container restarts.
+- **State is persisted to `/var/lib/docker-release`.** Images declare it as a volume, so it survives restarts and recreates; mount a named volume there to keep it through `docker compose down`.
 - **Test stacks live in `tests/`.** Each provider has its own compose stack. `tests/app.Dockerfile` builds the shared dummy app used across all test stacks.
 - **Run `go test ./...` after any Go change.** All packages have tests; keep them green.
 - **`entrypoint.sh` in the repo root is dead code** — the Dockerfile does not use it. Do not reference or restore it without first understanding why it was bypassed.

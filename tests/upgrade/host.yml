@@ -1,0 +1,15 @@
+services:
+  app:
+    env_file:
+      - ./.oga_tmp/app values.env
+    environment:
+      HOST_LITERAL: "literal $$cash and $$HOME"
+    volumes:
+      - "./.oga_tmp/host $$ files:/host-files:ro"
+    labels:
+      upgrade.revision: ${FROM_COMPOSE:-one}
+    networks:
+      default:
+      backend:
+        aliases:
+          - app-${FROM_COMPOSE:-one}

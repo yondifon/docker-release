@@ -72,10 +72,28 @@ func (c *Controller) processReleaseCommands(ctx context.Context) {
 	}
 }
 
+// ReleaseFailure returns an error with the stored reason when the service's
+// last release was undone because a check failed, and nil otherwise.
+func (c *Controller) ReleaseFailure(project, service string) error {
+	ds, err := c.managerFor(c.effectiveProject(project)).Load(service)
+	if err != nil || ds.Failure == "" {
+		return nil
+	}
+	return fmt.Errorf("release undone. %s\nThe old version is still serving. Fix the problem, then release again", ds.Failure)
+}
+
 // Release triggers a deployment for the given project and service. project is
 // required in global mode (c.project == "") so the correct state manager and
 // container filter are used.
 func (c *Controller) Release(ctx context.Context, project, service string, force bool) error {
+	return c.release(ctx, project, service, force, nil)
+}
+
+func (c *Controller) ReleaseWithComposeConfig(ctx context.Context, project, service string, force bool, cfg *docker.ComposeConfig) error {
+	return c.release(ctx, project, service, force, cfg)
+}
+
+func (c *Controller) release(ctx context.Context, project, service string, force bool, composeConfig *docker.ComposeConfig) error {
 	project = c.effectiveProject(project)
 	mgr := c.managerFor(project)
 	key := serviceKey{project: project, service: service}
@@ -115,6 +133,15 @@ func (c *Controller) Release(ctx context.Context, project, service string, force
 	if len(serviceContainers) == 0 {
 		return fmt.Errorf("no managed containers found for service %q", key.deployKey())
 	}
+	var resolvedProject *docker.ComposeProject
+	if composeConfig != nil {
+		source, _ := docker.ComposeProjectOf(serviceContainers[0].Labels)
+		resolved, err := composeConfig.Project(project, service, source)
+		if err != nil {
+			return err
+		}
+		resolvedProject = &resolved
+	}
 
 	revisions := groupByRevision(serviceContainers)
 
@@ -141,7 +168,7 @@ func (c *Controller) Release(ctx context.Context, project, service string, force
 		return fmt.Errorf("parsing labels: %w", err)
 	}
 
-	newContainers, cfg, err := c.scaleUp(ctx, key, serviceContainers)
+	newContainers, cfg, err := c.scaleUp(ctx, key, serviceContainers, resolvedProject)
 	if err != nil {
 		return fmt.Errorf("scaling up: %w", err)
 	}
@@ -162,10 +189,12 @@ func (c *Controller) Release(ctx context.Context, project, service string, force
 // them when the project's files are readable here, so they get what `docker
 // compose up` would give them; otherwise it copies the running containers.
 // Replacements the proxy can't reach are removed and reported as an error.
-func (c *Controller) scaleUp(ctx context.Context, key serviceKey, existing []types.Container) ([]types.Container, *config.ServiceConfig, error) {
+func (c *Controller) scaleUp(ctx context.Context, key serviceKey, existing []types.Container, resolvedProject *docker.ComposeProject) ([]types.Container, *config.ServiceConfig, error) {
 	var created []string
 	var err error
-	if project, ok := c.composeProject(key, existing[0]); ok {
+	if resolvedProject != nil {
+		created, err = c.composeScaleUp(ctx, key, *resolvedProject, existing)
+	} else if project, ok := c.composeProject(key, existing[0]); ok {
 		created, err = c.composeScaleUp(ctx, key, project, existing)
 	} else {
 		created, err = c.cloneScaleUp(ctx, existing, key)

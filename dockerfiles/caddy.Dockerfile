@@ -23,7 +23,8 @@ FROM docker/compose-bin:${COMPOSE_VERSION} AS compose
 FROM alpine:3.23 AS runtime
 
 RUN apk add --no-cache ca-certificates tini \
-  && mkdir -p /etc/caddy /shared/caddy-config
+  && mkdir -p /etc/caddy /shared/caddy-config /var/lib/docker-release
+VOLUME /var/lib/docker-release
 
 COPY --from=builder /bin/dr /usr/local/bin/dr
 COPY --from=compose /docker-compose /usr/local/bin/docker-compose

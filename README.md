@@ -23,8 +23,6 @@ services:
     stop_grace_period: 90s
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - .:${PWD}:ro
-      - docker-release-state:/var/lib/docker-release
 
   app:
     image: your-registry/app:latest
@@ -36,9 +34,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-
-volumes:
-  docker-release-state:
 ```
 
 Start it, [install the CLI](#install-cli), and deploy:
@@ -48,14 +43,14 @@ docker compose up -d
 docker release app
 ```
 
-Without the CLI, run `docker compose exec docker-release dr release app`.
+Without the CLI, run `docker compose exec docker-release dr release app`; without readable project files, this copies running containers and does not apply Compose file changes.
 
 Open `http://app.localhost/`. Browsers send `*.localhost` to your own machine. If port 80 is taken, change the first number in `"80:80"` and use that port in the address. On a server, set `release.host` to your domain and point its DNS at the server.
 
 - Your app needs a Docker health check. A new container gets traffic only after it is healthy.
 - Requests go to your app's lowest exposed port, or port 80 if it exposes none. Do not publish the app's ports.
-- Keep the project mount, the third volume. [What it does](docs/bundled-images.md#project-mount).
-- The state volume keeps rollback history when you recreate the service.
+- For prebuilt images, the host command applies Compose file changes without a project mount. [File access exceptions](docs/bundled-images.md#project-mount).
+- Rollback history survives restarts and upgrades of the service. To keep it through `docker compose down` as well, and to keep Caddy certificates, [add a named volume](docs/bundled-images.md#keep-state).
 - In production, pin a version such as `:0.2.0` instead of `latest`.
 
 Labels, TLS, and the other options: [Bundled proxy images](docs/bundled-images.md).
@@ -75,6 +70,8 @@ Every bundle uses the same Compose service and labels. To change proxy, change t
 Per-proxy details are in the [provider guides](docs/readme.md#provider-guides).
 
 ## Install CLI
+
+The host needs the Docker Compose plugin (`docker compose`), which is included in most Docker installations. Update the host CLI plugin and controller image together.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/yondifon/docker-release/main/scripts/docker-release \

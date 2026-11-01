@@ -97,4 +97,4 @@ services:
 |---|---|
 | Canary or blue-green rejected | Switch to `linear`, or use a proxy provider |
 | Deploy waits forever | Check the health check — `docker-release` waits until `healthy` |
-| Rollback state lost on restart | Mount `/var/lib/docker-release` to a named volume |
+| Rollback state lost after `docker compose down` | Mount `/var/lib/docker-release` to a named volume |

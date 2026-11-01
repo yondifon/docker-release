@@ -5,14 +5,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
+
+	"github.com/malico/docker-release/internal/config"
 )
 
 type bundledProxy struct{}
 
 func bundledProxyFromEnv() (*bundledProxy, error) {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")))
+	v := config.BundledProxy()
 	switch v {
 	case "", "none":
 		return nil, nil

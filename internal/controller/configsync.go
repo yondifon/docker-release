@@ -189,9 +189,6 @@ func (c *Controller) generateServiceConfig(ctx context.Context, key serviceKey, 
 			Service:      key.service,
 			UpstreamName: cfg.UpstreamName,
 		}
-	}
-
-	if !ok {
 		addrs := c.addrResolver(ctx, cfg)
 		for _, ctr := range containers {
 			addr, err := addrs.ContainerAddr(ctx, ctr.ID)
@@ -280,8 +277,9 @@ func (c *Controller) deploymentStateUpstream(ctx context.Context, key serviceKey
 	}
 
 	addrs := c.addrResolver(ctx, cfg)
-	stableWeight := 100 - weight
-	c.addWeightedServers(ctx, addrs, upstream, containersByID, ds.Containers.Stable, stableWeight, "stable")
+	if stableWeight := 100 - weight; stableWeight > 0 {
+		c.addWeightedServers(ctx, addrs, upstream, containersByID, ds.Containers.Stable, stableWeight, "stable")
+	}
 	c.addWeightedServers(ctx, addrs, upstream, containersByID, ds.Containers.Canary, weight, "canary")
 
 	if len(upstream.Servers) == 0 {

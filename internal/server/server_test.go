@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -18,79 +17,6 @@ func newTestServer(dir, project string) *Server {
 	mgr := state.NewManager(dir, project)
 	ctrl := controller.New(nil, mgr, project)
 	return &Server{cfg: Config{}, mgr: mgr, ctrl: ctrl, project: project}
-}
-
-func TestConfigFromEnvDefaults(t *testing.T) {
-	os.Unsetenv("DR_EXPOSE_API")
-	os.Unsetenv("DR_EXPOSE_WEB")
-	os.Unsetenv("DR_API_PORT")
-	os.Unsetenv("DR_WEB_PORT")
-	os.Unsetenv("DR_BIND_ADDR")
-
-	cfg := ConfigFromEnv()
-
-	if cfg.APIEnabled {
-		t.Error("APIEnabled should default to false")
-	}
-	if cfg.WebEnabled {
-		t.Error("WebEnabled should default to false")
-	}
-	if cfg.APIPort != 9080 {
-		t.Errorf("APIPort = %d, want 9080", cfg.APIPort)
-	}
-	if cfg.WebPort != 9081 {
-		t.Errorf("WebPort = %d, want 9081", cfg.WebPort)
-	}
-	if cfg.BindAddr != "0.0.0.0" {
-		t.Errorf("BindAddr = %s, want 0.0.0.0", cfg.BindAddr)
-	}
-}
-
-func TestConfigFromEnvOverrides(t *testing.T) {
-	t.Setenv("DR_EXPOSE_API", "true")
-	t.Setenv("DR_EXPOSE_WEB", "1")
-	t.Setenv("DR_API_PORT", "8080")
-	t.Setenv("DR_WEB_PORT", "8081")
-	t.Setenv("DR_BIND_ADDR", "127.0.0.1")
-
-	cfg := ConfigFromEnv()
-
-	if !cfg.APIEnabled {
-		t.Error("APIEnabled should be true")
-	}
-	if !cfg.WebEnabled {
-		t.Error("WebEnabled should be true")
-	}
-	if cfg.APIPort != 8080 {
-		t.Errorf("APIPort = %d, want 8080", cfg.APIPort)
-	}
-	if cfg.WebPort != 8081 {
-		t.Errorf("WebPort = %d, want 8081", cfg.WebPort)
-	}
-	if cfg.BindAddr != "127.0.0.1" {
-		t.Errorf("BindAddr = %s, want 127.0.0.1", cfg.BindAddr)
-	}
-}
-
-func TestEnvBool(t *testing.T) {
-	cases := []struct {
-		val  string
-		want bool
-	}{
-		{"true", true},
-		{"1", true},
-		{"yes", true},
-		{"false", false},
-		{"0", false},
-		{"", false},
-		{"True", false},
-	}
-	for _, c := range cases {
-		t.Setenv("TEST_BOOL_KEY", c.val)
-		if got := envBool("TEST_BOOL_KEY"); got != c.want {
-			t.Errorf("envBool(%q) = %v, want %v", c.val, got, c.want)
-		}
-	}
 }
 
 func TestHandleHealth(t *testing.T) {

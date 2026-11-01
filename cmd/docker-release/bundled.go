@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/malico/docker-release/internal/accesslog"
+	"github.com/malico/docker-release/internal/config"
 	"github.com/malico/docker-release/internal/health"
 	"github.com/malico/docker-release/internal/provider"
 )
@@ -28,7 +32,7 @@ type bundledProxy struct {
 }
 
 func bundledProxyFromEnv() (*bundledProxy, error) {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")))
+	v := config.BundledProxy()
 	switch v {
 	case "", "none":
 		return nil, nil
@@ -72,6 +76,16 @@ func runWithBundledProxy(ctx context.Context, proxy *bundledProxy, run func(cont
 	}
 	defer health.ClearReady()
 	defer clearBundledProxyStarted(proxy)
+
+	// A `dr release` run by `docker exec` is another process; it reads the proxy's
+	// requests from this socket.
+	serveCtx, stopServing := context.WithCancel(ctx)
+	defer stopServing()
+	go func() {
+		if err := accesslog.Serve(serveCtx, accesslog.Default, accesslog.SocketPath); err != nil {
+			slog.Error("access log socket stopped; release error rules cannot watch", "component", "main", "err", err)
+		}
+	}()
 	skip, set := os.LookupEnv("DR_PROXY_SKIP_CONFIG")
 	if !set && proxy.name == "nginx" {
 		skip = os.Getenv("DR_NGINX_SKIP_CONFIG")
@@ -116,8 +130,12 @@ func superviseBundledProxy(ctx context.Context, proxy *bundledProxy, run func(co
 	}
 
 	cmd := exec.Command(proxy.args[0], proxy.args[1:]...)
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = proxyStdout(proxy.name)
 	cmd.Stderr = os.Stderr
+	// The copy of the proxy's output ends when every process holding the pipe
+	// has exited. Stop waiting for it after a while, so a worker that outlives
+	// the proxy can't hold up shutdown.
+	cmd.WaitDelay = 5 * time.Second
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting bundled %s: %w", proxy.name, err)
 	}
@@ -126,6 +144,9 @@ func superviseBundledProxy(ctx context.Context, proxy *bundledProxy, run func(co
 	var proxyErr error
 	go func() {
 		proxyErr = cmd.Wait()
+		if errors.Is(proxyErr, exec.ErrWaitDelay) {
+			proxyErr = nil
+		}
 		close(proxyDone)
 	}()
 	defer func() {
@@ -158,6 +179,16 @@ func superviseBundledProxy(ctx context.Context, proxy *bundledProxy, run func(co
 	case <-ctx.Done():
 		return nil
 	}
+}
+
+// proxyStdout passes the proxy's output to this process's stdout and gives
+// each access log line to `accesslog.Default`.
+func proxyStdout(name string) io.Writer {
+	parse := accesslog.ParserFor(name)
+	if parse == nil {
+		return os.Stdout
+	}
+	return accesslog.Tee(os.Stdout, parse, accesslog.Default)
 }
 
 func waitForInitialConfigs(ctx context.Context, controllerDone <-chan struct{}, ready func() bool) error {
@@ -282,4 +313,28 @@ func truthy(v string) bool {
 	default:
 		return false
 	}
+}
+
+func runWithBundledRedirect(ctx context.Context, run func(context.Context) error) error {
+	// Traefik's redirect middleware sends `301`; bundles promise `308`.
+	listener, err := net.Listen("tcp", "127.0.0.1:8082")
+	if err != nil {
+		return err
+	}
+	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if hostname, _, err := net.SplitHostPort(host); err == nil {
+			host = hostname
+		}
+		w.Header().Set("Location", "https://"+host+r.URL.RequestURI())
+		w.WriteHeader(http.StatusPermanentRedirect)
+	})}
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	err = run(ctx)
+	_ = server.Close()
+	if serveErr := <-done; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		err = errors.Join(err, serveErr)
+	}
+	return err
 }

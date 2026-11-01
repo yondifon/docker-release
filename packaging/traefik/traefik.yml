@@ -17,6 +17,9 @@ entryPoints:
         graceTimeOut: 10s
   traefik:
     address: 127.0.0.1:8080
+# One JSON line per request on stdout. The app log stays on stderr.
+accessLog:
+  format: json
 api:
   insecure: true
   dashboard: false

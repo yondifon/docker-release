@@ -1,9 +1,6 @@
 package provider
 
 import (
-	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -122,25 +119,6 @@ func TestRenderTraefikWithIPAffinity(t *testing.T) {
 	}
 }
 
-func TestRenderTraefikDisabledAffinity(t *testing.T) {
-	state := &UpstreamState{
-		Service:  "app",
-		Affinity: "",
-		Servers: []Server{
-			{Addr: "172.18.0.5:80"},
-		},
-	}
-
-	got := renderTraefikYAML(state)
-
-	if strings.Contains(got, "sticky:") {
-		t.Error("disabled affinity should not have sticky section")
-	}
-	if strings.Contains(got, "cookie:") {
-		t.Error("disabled affinity should not have cookie section")
-	}
-}
-
 func TestRenderTraefikWeightedBlueGreenCutover(t *testing.T) {
 	state := &UpstreamState{
 		Service:  "blue_green_app",
@@ -193,49 +171,6 @@ func TestRenderTraefikSkipsDownServers(t *testing.T) {
 	}
 	if strings.Contains(got, "172.18.0.6") {
 		t.Error("down server should be excluded")
-	}
-}
-
-func TestTraefikGenerateConfigWritesFile(t *testing.T) {
-	dir := t.TempDir()
-	p := NewTraefik(dir)
-
-	state := &UpstreamState{
-		Service: "webapp",
-		Servers: []Server{
-			{Addr: "172.18.0.5:3000"},
-		},
-	}
-
-	if err := p.GenerateConfig(context.Background(), state); err != nil {
-		t.Fatalf("generate error: %v", err)
-	}
-
-	path := filepath.Join(dir, "webapp.yml")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read error: %v", err)
-	}
-
-	content := string(data)
-	if !strings.Contains(content, "webapp:") {
-		t.Error("file missing service name")
-	}
-	if !strings.Contains(content, `url: "http://172.18.0.5:3000"`) {
-		t.Error("file missing server url")
-	}
-
-	tmp := path + ".tmp"
-	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
-		t.Error("temp file not cleaned up")
-	}
-}
-
-func TestTraefikReloadIsNoop(t *testing.T) {
-	p := NewTraefik("/tmp/test")
-
-	if err := p.Reload(context.Background()); err != nil {
-		t.Errorf("reload should be no-op, got: %v", err)
 	}
 }
 

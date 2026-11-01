@@ -80,27 +80,14 @@ func (p *NginxProvider) RemoveStaleConfigs(ctx context.Context, active map[strin
 		return err
 	}
 	defer unlock()
-	changes := make(map[string][]byte)
-	files, err := p.configFilesByService()
+	dirs := map[string][]string{p.configDir: {".conf"}}
+	dirs[p.routeDir] = append(dirs[p.routeDir], ".server", ".location")
+	changes, err := staleConfigChanges(dirs, active, canRemove)
 	if err != nil {
 		return err
-	}
-	for name, paths := range files {
-		if active[name] || !canRemove(name) {
-			continue
-		}
-		for _, path := range paths {
-			changes[path] = nil
-		}
 	}
 	if len(changes) == 0 {
 		return nil
 	}
 	return p.applyConfigsLocked(ctx, changes)
-}
-
-func (p *NginxProvider) configFilesByService() (map[string][]string, error) {
-	dirs := map[string][]string{p.configDir: {".conf"}}
-	dirs[p.routeDir] = append(dirs[p.routeDir], ".server", ".location")
-	return proxyConfigFilesByService(dirs)
 }

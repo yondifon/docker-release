@@ -8,8 +8,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-
-	"github.com/malico/docker-release/internal/health"
 )
 
 //go:embed stock/nginx.tmpl
@@ -77,14 +75,6 @@ func NewNginxProxy(templatePath string) (*NginxProxyProvider, error) {
 	}, nil
 }
 
-func NewNginxProxyFromString(templatePath string, stockTmpl string) *NginxProxyProvider {
-	return &NginxProxyProvider{
-		templatePath: templatePath,
-		stockTmpl:    stockTmpl,
-		services:     make(map[string]*UpstreamState),
-	}
-}
-
 func (p *NginxProxyProvider) GenerateConfig(ctx context.Context, state *UpstreamState) error {
 	if err := state.Validate(); err != nil {
 		return err
@@ -98,33 +88,12 @@ func (p *NginxProxyProvider) GenerateConfig(ctx context.Context, state *Upstream
 	return p.writeTemplate()
 }
 
-func (p *NginxProxyProvider) RemoveService(service string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	delete(p.services, service)
-
-	return p.writeTemplate()
-}
-
 func (p *NginxProxyProvider) Reload(ctx context.Context) error {
 	return nil
 }
 
 func (p *NginxProxyProvider) writeTemplate() error {
-	tmpl := p.buildTemplate()
-
-	tmp := p.templatePath + ".tmp"
-	if err := os.WriteFile(tmp, []byte(tmpl), 0o644); err != nil {
-		return fmt.Errorf("writing template: %w", err)
-	}
-
-	if err := os.Rename(tmp, p.templatePath); err != nil {
-		return fmt.Errorf("renaming template: %w", err)
-	}
-
-	health.RecordFile(p.templatePath)
-	return nil
+	return writeConfigFile(p.templatePath, []byte(p.buildTemplate()), "template")
 }
 
 func (p *NginxProxyProvider) buildTemplate() string {
@@ -246,28 +215,7 @@ func renderNginxProxyUpstream(state *UpstreamState) string {
 		b.WriteString("    least_conn;\n")
 	}
 
-	for _, s := range state.Servers {
-		if s.Backup && !supportsNginxBackup(state.Affinity) {
-			continue
-		}
-
-		fmt.Fprintf(&b, "    server %s", s.Addr)
-
-		if s.Down {
-			b.WriteString(" down")
-		} else if s.Backup {
-			b.WriteString(" backup")
-		} else if s.Weight > 0 {
-			fmt.Fprintf(&b, " weight=%d", s.Weight)
-		}
-
-		b.WriteString(";\n")
-	}
-
-	if state.Keepalive > 0 {
-		fmt.Fprintf(&b, "    keepalive %d;\n", state.Keepalive)
-	}
-
+	writeNginxServers(&b, state, supportsNginxBackup(state.Affinity), false)
 	b.WriteString("}\n")
 
 	return b.String()

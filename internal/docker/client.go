@@ -3,7 +3,6 @@ package docker
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"reflect"
 	"slices"
@@ -80,14 +79,6 @@ func (c *Client) Remove(ctx context.Context, containerID string) error {
 	return err
 }
 
-func (c *Client) Logs(ctx context.Context, containerID string, lines string) (io.ReadCloser, error) {
-	return c.api.ContainerLogs(ctx, containerID, container.LogsOptions{
-		ShowStdout: true,
-		ShowStderr: true,
-		Tail:       lines,
-	})
-}
-
 func (c *Client) Events(ctx context.Context, project string) (<-chan events.Message, <-chan error) {
 	f := filters.NewArgs()
 	f.Add("type", "container")
@@ -133,10 +124,6 @@ func (c *Client) Exec(ctx context.Context, containerID string, cmd []string) err
 		case <-ticker.C:
 		}
 	}
-}
-
-func (c *Client) FindContainerByService(ctx context.Context, serviceName string) (types.Container, error) {
-	return c.FindContainerByServiceInProject(ctx, "", serviceName)
 }
 
 func (c *Client) FindContainerByServiceInProject(ctx context.Context, project, serviceName string) (types.Container, error) {
