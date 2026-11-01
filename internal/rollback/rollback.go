@@ -6,7 +6,6 @@ import (
 	"log/slog"
 
 	"github.com/malico/docker-release/internal/config"
-	"github.com/malico/docker-release/internal/provider"
 	"github.com/malico/docker-release/internal/state"
 	"github.com/malico/docker-release/internal/strategy"
 )
@@ -75,30 +74,6 @@ func (c *Coordinator) Execute(ctx context.Context, service string) error {
 	return s.Rollback(ctx, d)
 }
 
-func (c *Coordinator) ExecuteWithDeployment(ctx context.Context, d *strategy.Deployment) error {
-	ds, err := c.stateMgr.Load(d.Service)
-	if err != nil {
-		return fmt.Errorf("loading state: %w", err)
-	}
-
-	if ds.Status == state.StatusIdle {
-		return fmt.Errorf("service %q has no active deployment to roll back", d.Service)
-	}
-
-	s, ok := c.strategies[ds.Strategy]
-	if !ok {
-		return fmt.Errorf("unknown strategy %q in state", ds.Strategy)
-	}
-
-	ds.Status = state.StatusRollingBack
-	if err := c.stateMgr.Save(ds); err != nil {
-		return fmt.Errorf("saving rollback state: %w", err)
-	}
-
-	slog.Info("rolling back", "component", "rollback", "service", d.Service, "strategy", ds.Strategy)
-	return s.Rollback(ctx, d)
-}
-
 func (c *Coordinator) resolveContainers(ctx context.Context, ids []string) ([]strategy.ContainerInfo, error) {
 	var containers []strategy.ContainerInfo
 
@@ -117,8 +92,3 @@ func (c *Coordinator) resolveContainers(ctx context.Context, ids []string) ([]st
 
 	return containers, nil
 }
-
-type NoopProvider struct{}
-
-func (n *NoopProvider) GenerateConfig(_ context.Context, _ *provider.UpstreamState) error { return nil }
-func (n *NoopProvider) Reload(_ context.Context) error                                    { return nil }

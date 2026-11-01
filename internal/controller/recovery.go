@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"time"
 
 	"github.com/malico/docker-release/internal/state"
@@ -21,10 +22,7 @@ func (c *Controller) recoverInterruptedDeployments(ctx context.Context) {
 	// managerFor calls in discoverServices/syncServicesConfigs, so by the time
 	// we get here the map should be complete for the current container set.
 	c.mu.Lock()
-	snapshot := make(map[string]*state.Manager, len(c.stateManagers))
-	for k, v := range c.stateManagers {
-		snapshot[k] = v
-	}
+	snapshot := maps.Clone(c.stateManagers)
 	c.mu.Unlock()
 
 	for project, mgr := range snapshot {

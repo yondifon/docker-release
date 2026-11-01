@@ -51,12 +51,7 @@ func main() {
 			printUsage()
 			return
 		}
-		opts, err := parseReleaseOptions(os.Args[3:])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		requireProjectInGlobalMode(opts.project)
+		opts := mustParseReleaseOptions(os.Args[3:])
 		run(opts.project, func(ctrl *controller.Controller) error {
 			return runRelease(ctrl, opts.project, os.Args[2], opts)
 		})
@@ -69,12 +64,7 @@ func main() {
 			printUsage()
 			return
 		}
-		opts, err := parseReleaseOptions(os.Args[3:])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		requireProjectInGlobalMode(opts.project)
+		opts := mustParseReleaseOptions(os.Args[3:])
 		run(opts.project, func(ctrl *controller.Controller) error {
 			return ctrl.Rollback(context.Background(), opts.project, os.Args[2])
 		})
@@ -83,12 +73,7 @@ func main() {
 			printUsage()
 			return
 		}
-		opts, err := parseReleaseOptions(os.Args[2:])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		requireProjectInGlobalMode(opts.project)
+		opts := mustParseReleaseOptions(os.Args[2:])
 		run(opts.project, func(ctrl *controller.Controller) error {
 			return ctrl.Status(context.Background(), opts.project, opts.service)
 		})
@@ -109,12 +94,7 @@ func main() {
 			printUsage()
 			os.Exit(1)
 		}
-		opts, err := parseReleaseOptions(os.Args[2:])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		requireProjectInGlobalMode(opts.project)
+		opts := mustParseReleaseOptions(os.Args[2:])
 		run(opts.project, func(ctrl *controller.Controller) error {
 			return runRelease(ctrl, opts.project, os.Args[1], opts)
 		})
@@ -173,6 +153,18 @@ func parseReleaseOptions(args []string) (releaseOptions, error) {
 	}
 
 	return opts, nil
+}
+
+// mustParseReleaseOptions parses args and exits on a bad option or on a
+// missing project in global mode.
+func mustParseReleaseOptions(args []string) releaseOptions {
+	opts, err := parseReleaseOptions(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	requireProjectInGlobalMode(opts.project)
+	return opts
 }
 
 func runRelease(ctrl *controller.Controller, project, service string, opts releaseOptions) error {
