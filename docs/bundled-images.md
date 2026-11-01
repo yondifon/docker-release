@@ -60,6 +60,12 @@ Services with only `build` and no `image` still need the existing project mount.
 
 Direct controller commands and API, web, or queued detached releases without readable project files copy running containers and do not pick up Compose file changes.
 
+## Project mount
+
+The `.:${PWD}:ro` line in the quick start gives the bundle read access to your project folder, at the same path as on the host. A release then starts new containers with `docker compose`, so changes to your Compose file apply. Run `docker compose` from the project directory.
+
+Without it, the bundle copies the running container: the new image's settings apply, but Compose file changes do not.
+
 ## Routing labels
 
 | Label | Default | What you get |
