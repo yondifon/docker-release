@@ -243,3 +243,40 @@ func TestCaddyBackupServersDropped(t *testing.T) {
 		t.Error("backup server should be silently dropped for caddy")
 	}
 }
+
+func TestCaddyBundledPreviewLinkTokenOnlyWhileLive(t *testing.T) {
+	const token = "tok_abcdefghijklmnop"
+	state := &UpstreamState{
+		Service: "app",
+		Servers: []Server{{Addr: "10.0.0.1:80"}},
+		Preview: []Server{{Addr: "10.0.0.9:80"}},
+	}
+	for _, route := range []CaddyRoute{
+		{Host: "app.example.com", PreviewHost: "next.app.example.com", PreviewLink: true},
+		{Host: "app.example.com", Path: "/api", PreviewLink: true},
+	} {
+		dir := t.TempDir()
+		state.PreviewToken = ""
+		idle := bundledCaddyConf(t, dir, route, state)
+		state.PreviewToken = token
+		live := bundledCaddyConf(t, dir, route, state)
+		if !strings.Contains(live, token) || !strings.Contains(live, "10.0.0.9:80") {
+			t.Errorf("live link does not route the token to the preview servers:\n%s", live)
+		}
+		if strings.Contains(idle, token) || strings.Contains(idle, "dr_link") {
+			t.Errorf("link rules remain without a live token:\n%s", idle)
+		}
+	}
+}
+
+func TestCaddyBundledNoPreviewLinkLeavesConfigUnchanged(t *testing.T) {
+	route := CaddyRoute{Host: "app.example.com", Path: "/api"}
+	state := &UpstreamState{Service: "app", Servers: []Server{{Addr: "10.0.0.1:80"}}}
+	dir := t.TempDir()
+	before := bundledCaddyConf(t, dir, route, state)
+	state.Preview = []Server{{Addr: "10.0.0.9:80"}}
+	state.PreviewToken = "tok_abcdefghijklmnop"
+	if after := bundledCaddyConf(t, dir, route, state); after != before {
+		t.Errorf("a token changed config for a route without the link label:\n%s", after)
+	}
+}
