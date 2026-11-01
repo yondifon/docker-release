@@ -217,6 +217,8 @@ server {
 
 If you set `release.host` and include `/shared/nginx-routes/*.server`, `docker-release` writes this block for you.
 
+In the bundle you can also set `release.preview.token`, so one browser sees the new version on the normal host; see [Preview link](../readme.md#preview-link). With a separate Nginx, `release.preview.token` is refused.
+
 ## Notes
 
 - Nginx open source does not support sticky cookies. `release.affinity: cookie` falls back to IP hashing. Use Angie if you need real cookie sticky sessions with an Nginx-compatible config format.

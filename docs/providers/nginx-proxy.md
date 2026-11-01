@@ -131,7 +131,7 @@ release.bg.soak_time: 5m
 release.bg.green_weight: 50
 ```
 
-`release.preview.host` does not work with nginx-proxy, because nginx-proxy takes its hosts from `VIRTUAL_HOST`. The release is refused with a message. Use a [bundled image](../bundled-images.md) or another provider to get a [preview address](../readme.md#preview-address).
+`release.preview.host` does not work with nginx-proxy, because nginx-proxy takes its hosts from `VIRTUAL_HOST`. The release is refused with a message. Use a [bundled image](../bundled-images.md) or another provider to get a [preview address](../readme.md#preview-address). `release.preview.token` is refused with nginx-proxy for the same reason.
 
 ## Notes
 

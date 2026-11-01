@@ -1,6 +1,6 @@
 // Command bluegreen-app is the app behind tests/bundled/check-bluegreen.py.
 // Set MODE=bad and `/signup` answers 500; every other path answers 200 and
-// says which version and container served it.
+// says which version and container served it, and the query it was sent.
 package main
 
 import (
@@ -23,7 +23,7 @@ func main() {
 			http.Error(w, "version=bad signup is broken", http.StatusInternalServerError)
 			return
 		}
-		fmt.Fprintf(w, "version=%s host=%s path=%s\n", mode, host, r.URL.Path)
+		fmt.Fprintf(w, "version=%s host=%s path=%s query=%s\n", mode, host, r.URL.Path, r.URL.RawQuery)
 	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
 

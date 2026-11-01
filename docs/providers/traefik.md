@@ -202,6 +202,8 @@ traefik.http.routers.app-preview.rule: "Host(`next.app.example.com`)"
 traefik.http.routers.app-preview.service: "app-preview@file"
 ```
 
+In the bundle you can also set `release.preview.token`, so one browser sees the new version on the normal host; see [Preview link](../readme.md#preview-link). With a separate Traefik, `release.preview.token` is refused.
+
 ## Notes
 
 - `release.affinity: ip` uses sticky cookies for unweighted services and HRW (highest random weight) for weighted groups.
