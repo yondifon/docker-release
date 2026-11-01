@@ -79,6 +79,26 @@ type Provider interface {
 	Reload(ctx context.Context) error
 }
 
+// reloadTarget finds the proxy container and checks its image. With `trustLabel`, the
+// bundled `name` container skips the image check.
+func reloadTarget(ctx context.Context, d *docker.Client, project, serviceName, name string, trustLabel bool, images ...string) (types.Container, bool, error) {
+	ctr, running, err := resolveProxyContainer(ctx, d, project, serviceName, name)
+	if err != nil {
+		return ctr, false, fmt.Errorf("resolving %s container: %w", name, err)
+	}
+	if trustLabel && ctr.Labels["com.malico.docker-release.bundled-proxy"] == name {
+		return ctr, running, nil
+	}
+	if !matchesImage(ctr.Image, append(images, "alpine")...) {
+		want := images[0] + " or alpine-based"
+		if len(images) > 1 {
+			want = strings.Join(images, ", ") + ", or alpine-based"
+		}
+		return ctr, false, fmt.Errorf("container %q has unexpected image %q (want %s)", ctr.ID[:12], ctr.Image, want)
+	}
+	return ctr, running, nil
+}
+
 // resolveProxyContainer finds the proxy container, trying running containers first.
 // If not running, falls back to any state (stopped/exited) so the caller can start it.
 func resolveProxyContainer(ctx context.Context, d *docker.Client, project, serviceName, imageKeyword string) (ctr types.Container, running bool, err error) {

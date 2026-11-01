@@ -3,8 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 	"sync"
 
 	"github.com/malico/docker-release/internal/config"
@@ -50,14 +48,14 @@ func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 		}
 		return NewAngie(cfg.AngieConfigDir, f.docker, cfg.AngieService, f.project), nil
 	case config.ProviderTraefik:
-		if strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "traefik") {
+		if bundledProxy("traefik") {
 			return NewTraefikRoutes(cfg.TraefikConfigDir, route), nil
 		}
 		return NewTraefik(cfg.TraefikConfigDir), nil
 	case config.ProviderNginxProxy:
 		return f.nginxProxyProvider(cfg)
 	case config.ProviderCaddy:
-		if strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "caddy") {
+		if bundledProxy("caddy") {
 			return NewCaddyRoutes(cfg.CaddyConfigDir, CaddyRoute{
 				Host:        cfg.RouteHost,
 				Path:        cfg.RoutePath,
@@ -70,7 +68,7 @@ func (f *Factory) Provider(cfg *config.ServiceConfig) (Provider, error) {
 		}
 		return NewCaddy(cfg.CaddyConfigDir, f.docker, cfg.CaddyService, f.project), nil
 	case config.ProviderHAProxy:
-		if strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), "haproxy") {
+		if bundledProxy("haproxy") {
 			return NewHAProxyRoutes(cfg.HAProxyConfigDir, HAProxyRoute{
 				Host:        cfg.RouteHost,
 				Path:        cfg.RoutePath,

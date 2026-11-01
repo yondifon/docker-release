@@ -41,18 +41,6 @@ func (p *HAProxyProvider) reloadBundled(ctx context.Context) error {
 	}
 }
 
-func haproxyBootstrapping(ctx context.Context) (bool, error) {
-	if _, err := os.Stat("/run/docker-release/haproxy.started"); os.IsNotExist(err) {
-		if bootstrap, _ := ctx.Value(proxyBootstrapKey{}).(bool); bootstrap {
-			return true, nil
-		}
-		return false, fmt.Errorf("bundled haproxy is not ready; wait until the container is healthy before deploying")
-	} else if err != nil {
-		return false, err
-	}
-	return false, nil
-}
-
 func (p *HAProxyProvider) validateBundledConfig(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()

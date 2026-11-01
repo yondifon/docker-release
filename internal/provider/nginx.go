@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -76,24 +75,15 @@ func (p *NginxProvider) Reload(ctx context.Context) error {
 
 func (p *NginxProvider) reload(ctx context.Context) error {
 	name := p.proxyName
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("DR_BUNDLED_PROXY")), name) {
-		if _, err := os.Stat("/run/docker-release/" + name + ".started"); os.IsNotExist(err) {
-			if bootstrap, _ := ctx.Value(proxyBootstrapKey{}).(bool); bootstrap {
-				return nil
-			}
-			return fmt.Errorf("bundled %s is not ready; wait until the container is healthy before deploying", name)
-		} else if err != nil {
+	if bundledProxy(name) {
+		if bootstrap, err := bundledBootstrapping(ctx, name); bootstrap || err != nil {
 			return err
 		}
 	}
 
-	ctr, running, err := resolveProxyContainer(ctx, p.docker, p.project, p.serviceName, name)
+	ctr, running, err := reloadTarget(ctx, p.docker, p.project, p.serviceName, name, true, name)
 	if err != nil {
-		return fmt.Errorf("resolving %s container: %w", name, err)
-	}
-
-	if ctr.Labels["com.malico.docker-release.bundled-proxy"] != name && !matchesImage(ctr.Image, name, "alpine") {
-		return fmt.Errorf("container %q has unexpected image %q (want %s or alpine-based)", ctr.ID[:12], ctr.Image, name)
+		return err
 	}
 
 	if !running {
@@ -124,34 +114,39 @@ func renderUpstream(state *UpstreamState) string {
 		fmt.Fprintf(&b, "    least_conn;\n")
 	}
 
-	for _, s := range state.Servers {
-		if s.Backup && !supportsNginxBackup(state.Affinity) {
-			continue
-		}
-
-		fmt.Fprintf(&b, "    server %s", s.Addr)
-
-		if s.Down {
-			fmt.Fprintf(&b, " down")
-		} else if s.Backup {
-			fmt.Fprintf(&b, " backup")
-		} else if s.Weight > 0 {
-			fmt.Fprintf(&b, " weight=%d", s.Weight)
-		}
-
-		fmt.Fprintf(&b, ";\n")
-	}
-	if len(state.Servers) == 0 {
-		fmt.Fprintf(&b, "    server 127.0.0.1:1 down;\n")
-	}
-
-	if state.Keepalive > 0 {
-		fmt.Fprintf(&b, "    keepalive %d;\n", state.Keepalive)
-	}
+	writeNginxServers(&b, state, supportsNginxBackup(state.Affinity), true)
 
 	fmt.Fprintf(&b, "}\n")
 
 	return b.String()
+}
+
+// With `placeholder`, an upstream with no servers gets one marked down, so nginx still loads.
+func writeNginxServers(b *strings.Builder, state *UpstreamState, allowBackup, placeholder bool) {
+	for _, s := range state.Servers {
+		if s.Backup && !allowBackup {
+			continue
+		}
+
+		fmt.Fprintf(b, "    server %s", s.Addr)
+
+		if s.Down {
+			b.WriteString(" down")
+		} else if s.Backup {
+			b.WriteString(" backup")
+		} else if s.Weight > 0 {
+			fmt.Fprintf(b, " weight=%d", s.Weight)
+		}
+
+		b.WriteString(";\n")
+	}
+	if placeholder && len(state.Servers) == 0 {
+		b.WriteString("    server 127.0.0.1:1 down;\n")
+	}
+
+	if state.Keepalive > 0 {
+		fmt.Fprintf(b, "    keepalive %d;\n", state.Keepalive)
+	}
 }
 
 func renderNginxServer(state *UpstreamState, route NginxRoute, proxyName string) string {
