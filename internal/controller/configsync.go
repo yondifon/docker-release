@@ -277,8 +277,9 @@ func (c *Controller) deploymentStateUpstream(ctx context.Context, key serviceKey
 	}
 
 	addrs := c.addrResolver(ctx, cfg)
-	stableWeight := 100 - weight
-	c.addWeightedServers(ctx, addrs, upstream, containersByID, ds.Containers.Stable, stableWeight, "stable")
+	if stableWeight := 100 - weight; stableWeight > 0 {
+		c.addWeightedServers(ctx, addrs, upstream, containersByID, ds.Containers.Stable, stableWeight, "stable")
+	}
 	c.addWeightedServers(ctx, addrs, upstream, containersByID, ds.Containers.Canary, weight, "canary")
 
 	if len(upstream.Servers) == 0 {

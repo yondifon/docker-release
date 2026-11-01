@@ -199,7 +199,7 @@ func runRelease(ctrl *controller.Controller, project, service string, opts relea
 	}
 
 	ctrl.WaitDeployments()
-	return nil
+	return ctrl.ReleaseFailure(project, service)
 }
 
 func splitComposePaths(value string) []string {

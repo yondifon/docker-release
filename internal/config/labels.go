@@ -70,6 +70,7 @@ type ServiceConfig struct {
 
 	BlueGreen BlueGreenConfig
 	Canary    CanaryConfig
+	Check     CheckConfig
 }
 
 type BlueGreenConfig struct {
@@ -88,6 +89,11 @@ func ParseLabels(labels map[string]string) (*ServiceConfig, error) {
 		return nil, fmt.Errorf("release.enable is not true")
 	}
 	redirect, err := parseRouteRedirect(routeLabel(labels, "tls.redirect", "ssl.redirect"))
+	if err != nil {
+		return nil, err
+	}
+
+	check, err := parseCheck(labels)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +136,7 @@ func ParseLabels(labels map[string]string) (*ServiceConfig, error) {
 			Step:            parseIntOr(labels, "release.canary.step", 20),
 			Interval:        parseDurationOr(labels, "release.canary.interval", 2*time.Minute),
 		},
+		Check: check,
 	}
 
 	applyProviderDefaults(cfg)
@@ -229,6 +236,10 @@ func (c *ServiceConfig) validate() error {
 
 	if c.BlueGreen.GreenWeight < 1 || c.BlueGreen.GreenWeight > 100 {
 		return fmt.Errorf("bg.green_weight must be 1-100, got %d", c.BlueGreen.GreenWeight)
+	}
+
+	if err := c.validateCheck(); err != nil {
+		return err
 	}
 
 	if c.NginxKeepalive < -1 {
