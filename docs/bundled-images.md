@@ -2,17 +2,27 @@
 
 Run a proxy and docker-release in one Compose service. Add routing labels to your apps; you do not need a proxy config file or a shared config volume.
 
+## What a bundle gives you
+
+- Routing from labels: hosts, paths, and [TLS](#add-tls), with automatic HTTPS on Caddy.
+- Three [release strategies](readme.md#deploy-strategies): linear, blue/green, and canary.
+- [Release checks](#release-checks): a smoke test before users move, and error watching after.
+- A [preview address](#preview-address) and a [preview link](#preview-link) to try a new version before users see it.
+- [Sticky sessions](readme.md#session-affinity) and [rollback history](#keep-state).
+
 ## Choose an image
 
-| Proxy | Image |
-|---|---|
-| Nginx | `malico/docker-release-nginx:<version>` |
-| Angie | `malico/docker-release-angie:<version>` |
-| Caddy | `malico/docker-release-caddy:<version>` |
-| HAProxy | `malico/docker-release-haproxy:<version>` |
-| Traefik | `malico/docker-release-traefik:<version>` |
+All bundles are tags of one repo, `malico/docker-release`.
 
-Use a release version in production, such as `:0.2.0`. `latest` follows the newest release. Images support `linux/amd64` and `linux/arm64`.
+| Proxy | Newest | Pinned |
+|---|---|---|
+| Nginx | `malico/docker-release:nginx` | `malico/docker-release:<version>-nginx` |
+| Angie | `malico/docker-release:angie` | `malico/docker-release:<version>-angie` |
+| Caddy | `malico/docker-release:caddy` | `malico/docker-release:<version>-caddy` |
+| HAProxy | `malico/docker-release:haproxy` | `malico/docker-release:<version>-haproxy` |
+| Traefik | `malico/docker-release:traefik` | `malico/docker-release:<version>-traefik` |
+
+In production, pin a release, such as `:0.2.0-nginx`. To follow a major version, use `:0-nginx`. The plain `:nginx` tag follows the newest release. Images support `linux/amd64` and `linux/arm64`. `malico/docker-release:latest` is the controller without a proxy; see [your own proxy](own-proxy.md).
 
 ## Add the service
 
@@ -24,7 +34,7 @@ The Docker socket lets docker-release manage containers and grants control of th
 
 No environment variables, `release.provider` label, proxy service name, or health check override is needed. The image supplies its own health check. It becomes healthy when routing is ready and the proxy accepts HTTP requests.
 
-Deploy with `docker release app` from the [host command](../README.md#install-cli). Keep a health check that proves each app can serve requests.
+Deploy with `docker release app` from the [host command](../README.md#install-cli). Without the CLI, run `docker compose exec docker-release dr release app`; it copies the running containers and does not apply Compose file changes. Keep a health check that proves each app can serve requests.
 
 Caddy, HAProxy, and Traefik app releases keep existing client connections open. Changes to hostnames, routes, or TLS settings can close idle connections; apply those changes during a maintenance window.
 
@@ -59,12 +69,6 @@ Update the host CLI plugin and controller image together. An existing `.:${PWD}:
 Services with only `build` and no `image` still need the existing project mount. App bind mounts and `env_file` work without a project mount. File-backed Compose configs, secrets, and custom seccomp profiles still need their files readable at matching paths inside the controller. For these dependencies, keep an existing optional project mount, or replace it with read-only mounts of only the needed files at matching paths.
 
 Direct controller commands and API, web, or queued detached releases without readable project files copy running containers and do not pick up Compose file changes.
-
-## Project mount
-
-The `.:${PWD}:ro` line in the quick start gives the bundle read access to your project folder, at the same path as on the host. A release then starts new containers with `docker compose`, so changes to your Compose file apply. Run `docker compose` from the project directory.
-
-Without it, the bundle copies the running container: the new image's settings apply, but Compose file changes do not.
 
 ## Routing labels
 
@@ -114,6 +118,8 @@ The watch reads the access log lines the bundle writes. Each line now says which
 ## Preview address
 
 Add `release.preview.host: next.app.example.com` to a blue/green app, and every bundle adds a route for that host during a release. It shows only the new version, and answers 404 once users move or the release fails. The route uses the same certificate settings as `release.host`, so a certificate you mount must cover the preview host too. Caddy gets its own certificate. See [Preview address](readme.md#preview-address).
+
+## Preview link
 
 To try the new version on the normal host instead, with no extra DNS, add `release.preview.token: auto`. `docker release status app` then prints a link that shows the new version to one browser. This works only in a bundled image. See [Preview link](readme.md#preview-link).
 

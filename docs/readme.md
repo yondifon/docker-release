@@ -1,5 +1,12 @@
 # docker-release Docs
 
+## Start here
+
+1. [Bundled proxy images](bundled-images.md): the proxy and docker-release in one container. Labels, HTTPS, release checks, preview address, preview link, and rollback history.
+2. [Use your own proxy](own-proxy.md): the controller-only image, for a proxy you already run, one controller for many projects, or workers with no proxy.
+
+The [quick start](../README.md#quick-start) has a working Compose file.
+
 ## Concepts
 
 `docker-release` runs as a service inside your Compose stack, alone or bundled with a proxy. It connects to the Docker socket and watches for deploy commands.
@@ -16,16 +23,16 @@ It never touches traffic directly. The proxy serves all requests: the one in you
 
 ## Images
 
-Start with a bundle: one `docker-release` service that runs your proxy and the controller together. Add `release.host` to an app and it is routed. Setup, labels, and TLS: [Bundled proxy images](bundled-images.md). The [README quick start](../README.md#quick-start) has a working file.
+Start with a bundle: one `docker-release` service that runs your proxy and the controller together. Add `release.host` to an app and it is routed. Setup, labels, and TLS: [Bundled proxy images](bundled-images.md).
 
 | Image | Use |
 |---|---|
-| `malico/docker-release-nginx` | Nginx + controller |
-| `malico/docker-release-angie` | Angie + controller |
-| `malico/docker-release-caddy` | Caddy + controller, automatic HTTPS |
-| `malico/docker-release-haproxy` | HAProxy + controller |
-| `malico/docker-release-traefik` | Traefik + controller |
-| `malico/docker-release` | Controller only; for a proxy you already run, [global mode](global.md), or workers |
+| `malico/docker-release:nginx` | Nginx + controller |
+| `malico/docker-release:angie` | Angie + controller |
+| `malico/docker-release:caddy` | Caddy + controller, automatic HTTPS |
+| `malico/docker-release:haproxy` | HAProxy + controller |
+| `malico/docker-release:traefik` | Traefik + controller |
+| `malico/docker-release` | Controller only; for a proxy you already run, [global mode](global.md), or workers. See [your own proxy](own-proxy.md) |
 
 All images support the same `docker release` commands.
 
