@@ -17,7 +17,7 @@ Add one `docker-release` service to your Compose file. It runs Nginx and the rel
 ```yaml
 services:
   docker-release:
-    image: malico/docker-release-nginx:latest
+    image: malico/docker-release:nginx
     ports:
       - "80:80"
     stop_grace_period: 90s
@@ -43,31 +43,27 @@ docker compose up -d
 docker release app
 ```
 
-Without the CLI, run `docker compose exec docker-release dr release app`; without readable project files, this copies running containers and does not apply Compose file changes.
-
 Open `http://app.localhost/`. Browsers send `*.localhost` to your own machine. If port 80 is taken, change the first number in `"80:80"` and use that port in the address. On a server, set `release.host` to your domain and point its DNS at the server.
 
 - Your app needs a Docker health check. A new container gets traffic only after it is healthy.
 - Requests go to your app's lowest exposed port, or port 80 if it exposes none. Do not publish the app's ports.
-- For prebuilt images, the host command applies Compose file changes without a project mount. [File access exceptions](docs/bundled-images.md#project-mount).
-- Rollback history survives restarts and upgrades of the service. To keep it through `docker compose down` as well, and to keep Caddy certificates, [add a named volume](docs/bundled-images.md#keep-state).
-- In production, pin a version such as `:0.2.0` instead of `latest`.
+- In production, pin a version such as `:0.2.0-nginx` instead of `:nginx`.
 
-Labels, TLS, and the other options: [Bundled proxy images](docs/bundled-images.md).
+Next: [Bundled proxy images](docs/bundled-images.md) covers labels, HTTPS, release checks, preview links, and rollback history.
 
 ## Pick Your Proxy
 
-Every bundle uses the same Compose service and labels. To change proxy, change the image.
+Every bundle uses the same Compose service and labels. To change proxy, change the image tag.
 
 | Image | Good for |
 |---|---|
-| `malico/docker-release-nginx` | The usual choice. Plain Nginx |
-| `malico/docker-release-caddy` | Automatic HTTPS with free certificates |
-| `malico/docker-release-traefik` | No proxy reload on release |
-| `malico/docker-release-haproxy` | No proxy reload on release; sticky cookies |
-| `malico/docker-release-angie` | Nginx-compatible, with sticky cookies |
+| `malico/docker-release:nginx` | The usual choice. Plain Nginx |
+| `malico/docker-release:caddy` | Automatic HTTPS with free certificates |
+| `malico/docker-release:traefik` | No proxy reload on release |
+| `malico/docker-release:haproxy` | No proxy reload on release; sticky cookies |
+| `malico/docker-release:angie` | Nginx-compatible, with sticky cookies |
 
-Per-proxy details are in the [provider guides](docs/readme.md#provider-guides).
+Already run a proxy, or want one controller for many projects? See [your own proxy](docs/own-proxy.md).
 
 ## Install CLI
 
@@ -88,21 +84,6 @@ docker release rollback app            # roll back (note: rollback comes before 
 docker release status                  # show all services
 docker release status app              # show one service
 ```
-
-## Already Run a Proxy?
-
-Use the controller-only image, `malico/docker-release`, when you already run nginx-proxy, Nginx, Angie, Caddy, HAProxy, or Traefik yourself, or when you need one controller for many projects. It also deploys workers that have no proxy.
-
-| Setup | Guide |
-|---|---|
-| nginx-proxy | [docs/providers/nginx-proxy.md](docs/providers/nginx-proxy.md) |
-| Nginx | [docs/providers/nginx.md](docs/providers/nginx.md) |
-| Caddy | [docs/providers/caddy.md](docs/providers/caddy.md) |
-| Traefik | [docs/providers/traefik.md](docs/providers/traefik.md) |
-| Angie | [docs/providers/angie.md](docs/providers/angie.md) |
-| HAProxy | [docs/providers/haproxy.md](docs/providers/haproxy.md) |
-| No proxy (workers) | [docs/providers/none.md](docs/providers/none.md) |
-| One controller for all projects | [docs/global.md](docs/global.md) |
 
 ## Full Docs
 
