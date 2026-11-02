@@ -1,4 +1,4 @@
-ARG COMPOSE_VERSION=v2.40.3
+ARG COMPOSE_VERSION=v5.6.1
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 ARG VERSION=dev
 ARG TARGETOS
@@ -12,7 +12,8 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w -X 
 FROM docker/compose-bin:${COMPOSE_VERSION} AS compose
 
 FROM alpine:3.23 AS runtime
-RUN apk add --no-cache ca-certificates \
+RUN apk upgrade --no-cache \
+  && apk add --no-cache ca-certificates \
   && mkdir -p /var/lib/docker-release
 VOLUME /var/lib/docker-release
 COPY --from=builder /bin/dr /usr/local/bin/dr
