@@ -6,7 +6,7 @@ Start with the bundle: Nginx and `docker-release` in one service, with routes ge
 
 ## Bundled image
 
-Use `malico/docker-release-nginx:<version>`. The [quick start](../../README.md#quick-start) is a complete Compose file for it; the [shared bundle setup](../bundled-images.md) lists the labels. You do not need `release.provider`, an Nginx config file, or a shared config volume.
+Use `malico/docker-release:nginx`. The [quick start](../../README.md#quick-start) is a complete Compose file for it; the [shared bundle setup](../bundled-images.md) lists the labels. You do not need `release.provider`, an Nginx config file, or a shared config volume.
 
 ### Custom config
 
@@ -126,7 +126,7 @@ release.enable: "true"
 release.provider: nginx
 ```
 
-With `malico/docker-release-nginx`, `release.provider` is optional because the image sets `DR_DEFAULT_PROVIDER=nginx`.
+With `malico/docker-release:nginx`, `release.provider` is optional because the image sets `DR_DEFAULT_PROVIDER=nginx`.
 
 ## Deploy
 

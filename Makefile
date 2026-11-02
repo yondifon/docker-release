@@ -1,10 +1,7 @@
 VERSION ?= $(shell v=$$(git tag --points-at HEAD 2>/dev/null | head -1); echo $${v:-dev})
 IMAGE   ?= malico/docker-release
-NGINX_IMAGE ?= $(IMAGE)-nginx
-ANGIE_IMAGE ?= $(IMAGE)-angie
-CADDY_IMAGE ?= $(IMAGE)-caddy
-HAPROXY_IMAGE ?= $(IMAGE)-haproxy
-TRAEFIK_IMAGE ?= $(IMAGE)-traefik
+# Major part of VERSION when it is x.y or x.y.z; empty otherwise.
+MAJOR := $(shell echo "$(VERSION)" | grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$$' | cut -d. -f1)
 
 PROXIES := nginx angie caddy haproxy traefik
 # Test stacks under tests/ that have up-<name> and down-<name> targets.
@@ -14,8 +11,9 @@ BUILD_TARGETS := $(addprefix build-,$(PROXIES))
 UP_TARGETS := $(addprefix up-,$(STACKS))
 DOWN_TARGETS := $(addprefix down-,$(STACKS))
 
-# bundle_image <proxy>: the image name for a bundled proxy, e.g. NGINX_IMAGE.
-bundle_image = $($(shell echo $(1) | tr a-z A-Z)_IMAGE)
+# bundle_tags <proxy>: -t flags for a bundle, all in the one $(IMAGE) repo:
+# <proxy> (newest), <version>-<proxy> and, for a release version, <major>-<proxy>.
+bundle_tags = -t $(IMAGE):$(1) -t $(IMAGE):$(VERSION)-$(1) $(if $(MAJOR),-t $(IMAGE):$(MAJOR)-$(1))
 
 # Bump type passed as a goal: make publish major|minor|fix
 BUMP := $(filter major minor fix,$(MAKECMDGOALS))
@@ -36,8 +34,7 @@ $(BUILD_TARGETS): build-%:
 	docker build \
 		-f dockerfiles/$*.Dockerfile \
 		--build-arg VERSION=$(VERSION) \
-		-t $(call bundle_image,$*):$(VERSION) \
-		-t $(call bundle_image,$*):latest \
+		$(call bundle_tags,$*) \
 		.
 
 tag:
@@ -94,21 +91,18 @@ ifneq ($(BUMP),)
 else
 	@test "$(VERSION)" != "dev" || (echo "ERROR: set VERSION=x.y.z or use: make publish major|minor|fix"; exit 1)
 	$(MAKE) buildx-builder
-	@major=$$(echo "$(VERSION)" | grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$$' | cut -d. -f1); \
-	publish_image() { \
+	@publish_image() { \
 		docker buildx build \
 			--builder docker-release-builder \
 			--platform linux/amd64,linux/arm64 \
-			$$2 \
+			$$1 \
 			--build-arg VERSION=$(VERSION) \
-			-t $$1:$(VERSION) \
-			-t $$1:latest \
-			$${major:+-t $$1:$$major} \
+			$$2 \
 			--push \
 			.; \
 	}; \
-	publish_image $(IMAGE) "--target runtime" && \
-	$(foreach p,$(PROXIES),publish_image $(call bundle_image,$(p)) "-f dockerfiles/$(p).Dockerfile" && ) \
+	publish_image "--target runtime" "-t $(IMAGE):$(VERSION) -t $(IMAGE):latest $(if $(MAJOR),-t $(IMAGE):$(MAJOR))" && \
+	$(foreach p,$(PROXIES),publish_image "-f dockerfiles/$(p).Dockerfile" "$(call bundle_tags,$(p))" && ) \
 	$(MAKE) tag
 endif
 

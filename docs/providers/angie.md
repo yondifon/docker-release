@@ -8,7 +8,7 @@ Angie is API-compatible with Nginx but adds native sticky cookie support, which 
 
 ## Bundled image
 
-Use `malico/docker-release-angie:<version>` in place of the image in the [quick start](../../README.md#quick-start). The [shared bundle setup](../bundled-images.md) lists the labels. You do not need `release.provider`, an Angie config file, or a shared config volume.
+Use `malico/docker-release:angie` in place of the image in the [quick start](../../README.md#quick-start). The [shared bundle setup](../bundled-images.md) lists the labels. You do not need `release.provider`, an Angie config file, or a shared config volume.
 
 Set `release.affinity: cookie` for native sticky cookies. The default remains `ip`. You can also use `release.angie.sticky.learn.name` to route by a cookie your app sets.
 
