@@ -1,0 +1,12 @@
+# Overlay for check-bluegreen.py --scenario preview_link_tls: the test
+# certificate from .oga_tmp/certs on the app, and HTTPS published next to HTTP.
+services:
+  docker-release:
+    ports:
+      - "8447:443"
+    volumes:
+      - ${PWD}/.oga_tmp/certs:/certs/nginx:ro
+  bg_app:
+    labels:
+      release.tls.cert: /certs/nginx/cert.pem
+      release.tls.key: /certs/nginx/key.pem

@@ -27,10 +27,43 @@ func haproxyBackendOptions(data []byte) string {
 	return strings.Join(lines, "\n")
 }
 
+// updateHAProxyBackend applies the servers of every backend in data.
 func updateHAProxyBackend(ctx context.Context, data []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	for _, section := range splitHAProxyBackends(data) {
+		if err := updateHAProxyBackendServers(ctx, section); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// splitHAProxyBackends cuts data into one chunk per `backend` line.
+func splitHAProxyBackends(data []byte) [][]byte {
+	var sections [][]byte
+	var current []string
+	flush := func() {
+		if len(current) > 0 {
+			sections = append(sections, []byte(strings.Join(current, "\n")))
+		}
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == "backend" {
+			flush()
+			current = nil
+		}
+		current = append(current, line)
+	}
+	flush()
+	return sections
+}
+
+func updateHAProxyBackendServers(ctx context.Context, data []byte) error {
 	backend, servers := haproxyBackendServers(data)
+	if backend == "" {
+		return nil
+	}
 	existing, err := haproxyServerStates(ctx, backend)
 	if err != nil {
 		return err

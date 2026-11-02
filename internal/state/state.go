@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/malico/docker-release/internal/config"
 )
 
 var validName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
@@ -46,8 +48,23 @@ type DeploymentState struct {
 	Containers           Containers `json:"containers"`
 	// Failure says why the last release was undone, with the output of the
 	// check that failed. It is empty when the release did not fail a check.
-	Failure   string    `json:"failure,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Failure string `json:"failure,omitempty"`
+	// PreviewToken and PreviewURL are set only while a blue/green release is
+	// waiting on green with `release.preview.token`. The token is a secret:
+	// keep it out of logs and out of responses that need no sign-in.
+	// PreviewURL is the address without the token, empty when the service has no host.
+	PreviewToken string    `json:"preview_token,omitempty"`
+	PreviewURL   string    `json:"preview_url,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// PreviewLink is the address that sets the preview cookie, or "" when there is
+// no live token or no address to put it on.
+func (s *DeploymentState) PreviewLink() string {
+	if s.PreviewToken == "" || s.PreviewURL == "" {
+		return ""
+	}
+	return s.PreviewURL + "?" + config.PreviewQueryParam + "=" + s.PreviewToken
 }
 
 func (s *DeploymentState) IsStale(threshold time.Duration) bool {

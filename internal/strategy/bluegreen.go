@@ -2,10 +2,13 @@ package strategy
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/malico/docker-release/internal/config"
 	"github.com/malico/docker-release/internal/provider"
 	"github.com/malico/docker-release/internal/state"
 )
@@ -47,9 +50,17 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 		return err
 	}
 
+	var previewToken string
+	if d.Config.HasPreview() {
+		var err error
+		if previewToken, err = bg.publishPreview(ctx, d, ds); err != nil {
+			return err
+		}
+	}
+
 	check := d.Config.Check
 	if check.Command != "" {
-		reason, err := runChecks(ctx, d)
+		reason, err := runChecks(ctx, d, previewToken)
 		if err != nil {
 			return err
 		}
@@ -88,6 +99,8 @@ func (bg *BlueGreen) Execute(ctx context.Context, d *Deployment) error {
 		return fmt.Errorf("reloading provider: %w", err)
 	}
 
+	// The cutover config has no preview, so the token no longer works.
+	ds.PreviewToken, ds.PreviewURL = "", ""
 	ds.CurrentWeight = d.Config.BlueGreen.GreenWeight
 	if watch != nil {
 		ds.CurrentWeight = 100
@@ -148,13 +161,73 @@ func (bg *BlueGreen) settleAfterSoak(ctx context.Context, d *Deployment) error {
 	return promoteAndDrain(ctx, "blue-green", bg.docker, bg.provider, d, "")
 }
 
+// publishPreview lets green answer on the preview host, and for browsers and
+// scripts that carry the preview token, while blue keeps serving everyone else.
+// The switch config has no preview, so both end there. It returns the token,
+// which is empty when `release.preview.token` is not set.
+func (bg *BlueGreen) publishPreview(ctx context.Context, d *Deployment, ds *state.DeploymentState) (string, error) {
+	token, err := newPreviewToken(d.Config)
+	if err != nil {
+		return "", err
+	}
+	if token != "" {
+		ds.PreviewToken, ds.PreviewURL = token, d.Config.PreviewBase()
+		if err := bg.state.Save(ds); err != nil {
+			return "", fmt.Errorf("saving preview state: %w", err)
+		}
+	}
+	upstream := blueOnlyUpstream(d)
+	upstream.PreviewToken = token
+	for _, c := range d.New {
+		upstream.Preview = append(upstream.Preview, provider.Server{Addr: c.Addr})
+	}
+	if err := bg.provider.GenerateConfig(ctx, upstream); err != nil {
+		return "", fmt.Errorf("generating preview config: %w", err)
+	}
+	if err := bg.provider.Reload(ctx); err != nil {
+		return "", fmt.Errorf("reloading provider for the preview: %w", err)
+	}
+	slog.Info("green answers before users move", "component", "blue-green", "service", d.Service, "host", d.Config.PreviewHost, "link", token != "")
+	return token, nil
+}
+
+// newPreviewToken is the token for this release: the fixed value from the
+// label, or a new random one for `auto`. It is empty when the label is not set.
+func newPreviewToken(cfg *config.ServiceConfig) (string, error) {
+	if cfg.PreviewToken != config.PreviewTokenAuto {
+		return cfg.PreviewToken, nil
+	}
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generating preview token: %w", err)
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+// withdrawPreview takes the preview away when the release stops before the
+// switch. Failing here is logged only: the release has already failed.
+func (bg *BlueGreen) withdrawPreview(ctx context.Context, d *Deployment) {
+	if !d.Config.HasPreview() {
+		return
+	}
+	if err := bg.provider.GenerateConfig(ctx, blueOnlyUpstream(d)); err != nil {
+		slog.Warn("removing the preview failed", "component", "blue-green", "service", d.Service, "err", err)
+		return
+	}
+	if err := bg.provider.Reload(ctx); err != nil {
+		slog.Warn("reloading provider without the preview failed", "component", "blue-green", "service", d.Service, "err", err)
+	}
+}
+
 // undoBeforeSwitch removes the new containers after a failed check. The proxy
 // never sent them traffic, so the old containers keep serving untouched.
 func (bg *BlueGreen) undoBeforeSwitch(ctx context.Context, d *Deployment, ds *state.DeploymentState, reason string) error {
 	slog.Warn("check failed, removing green", "component", "blue-green", "service", d.Service)
+	bg.withdrawPreview(ctx, d)
 	removeContainers(ctx, "blue-green", bg.docker, d.New)
 
 	ds.Status = state.StatusIdle
+	ds.PreviewToken, ds.PreviewURL = "", ""
 	ds.Containers = state.Containers{Stable: containerIDs(d.Old)}
 	ds.Failure = reason
 	if err := bg.state.Save(ds); err != nil {
@@ -170,6 +243,16 @@ func (bg *BlueGreen) undoAfterSwitch(ctx context.Context, d *Deployment, reason 
 		return err
 	}
 	return &UndoneError{Reason: reason}
+}
+
+// blueOnlyUpstream is the config before the switch: everyone goes to blue.
+func blueOnlyUpstream(d *Deployment) *provider.UpstreamState {
+	upstream := &provider.UpstreamState{Service: d.Service, UpstreamName: d.UpstreamName(), Affinity: d.Config.Affinity}
+	for _, c := range d.Old {
+		upstream.Servers = append(upstream.Servers, provider.Server{Addr: c.Addr})
+	}
+	ApplyProviderSettings(d.Config, upstream)
+	return upstream
 }
 
 func buildBlueGreenCutoverUpstream(d *Deployment) *provider.UpstreamState {

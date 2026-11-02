@@ -20,11 +20,18 @@ type checkRunner struct {
 // RunCheck runs the command inside the new container, or, with
 // `release.check.service`, in a one-off container of that Compose service on
 // the new container's network.
-func (r checkRunner) RunCheck(ctx context.Context, target strategy.ContainerInfo) (strategy.CheckResult, error) {
+func (r checkRunner) RunCheck(ctx context.Context, target strategy.ContainerInfo, previewToken string) (strategy.CheckResult, error) {
 	check := r.cfg.Check
 	env := []string{
 		"RELEASE_TARGET=http://" + target.Addr,
 		"RELEASE_HOST=" + firstHost(r.cfg.RouteHost),
+	}
+
+	if r.cfg.PreviewHost != "" {
+		env = append(env, "RELEASE_PREVIEW_URL="+r.cfg.Origin(r.cfg.PreviewHost))
+	}
+	if previewToken != "" {
+		env = append(env, "RELEASE_PREVIEW_TOKEN="+previewToken)
 	}
 
 	var result docker.CommandResult

@@ -327,3 +327,154 @@ func TestBundleSwitchKeepsRoutesAndRejectedChangesDoNotPoisonOtherApps(t *testin
 		})
 	}
 }
+
+func previewRoute() NginxRoute {
+	return NginxRoute{
+		Host: "app.example.com", PreviewHost: "next.app.example.com",
+		SSLCert: "/certs/app.pem", SSLKey: "/certs/app.key", SSLRedirect: true,
+	}
+}
+
+func TestNginxPreviewHostAnswersOnlyWhilePreviewIsLive(t *testing.T) {
+	for _, kind := range []string{"nginx", "angie"} {
+		t.Run(kind, func(t *testing.T) {
+			p, _ := nginxReloadFixture(t, kind+":alpine")
+			p.proxyName = kind
+			p.route = previewRoute()
+			ctx := context.Background()
+			state := &UpstreamState{
+				Service: "app", Servers: []Server{{Addr: "10.0.0.1:80"}},
+				Preview: []Server{{Addr: "10.0.0.2:80"}},
+			}
+			generate := func() (upstream, server string) {
+				t.Helper()
+				if err := p.GenerateConfig(ctx, state); err != nil {
+					t.Fatal(err)
+				}
+				if err := p.Reload(ctx); err != nil {
+					t.Fatal(err)
+				}
+				u, _ := os.ReadFile(filepath.Join(p.configDir, "app.conf"))
+				s, _ := os.ReadFile(filepath.Join(p.routeDir, "app.server"))
+				return string(u), string(s)
+			}
+
+			upstream, server := generate()
+			if !strings.Contains(upstream, "upstream app_preview_upstream {") || !strings.Contains(upstream, "server 10.0.0.2:80;") {
+				t.Fatalf("preview upstream missing: %s", upstream)
+			}
+			if strings.Count(server, "server_name next.app.example.com;") != 2 {
+				t.Fatalf("preview host needs an http and an https block: %s", server)
+			}
+			for _, want := range []string{
+				"proxy_pass http://app_preview_upstream/;",
+				"ssl_certificate /certs/app.pem;",
+				"ssl_certificate_key /certs/app.key;",
+				"return 308 https://$host$request_uri;",
+				"proxy_pass http://app_upstream/;",
+			} {
+				if !strings.Contains(server, want) {
+					t.Fatalf("server file missing %q: %s", want, server)
+				}
+			}
+			if strings.Index(server, "server_name app.example.com;") > strings.Index(server, "server_name next.app.example.com;") {
+				t.Fatalf("preview blocks must follow the main ones: %s", server)
+			}
+
+			// The switch: no preview servers. The route is gone, the upstream stays.
+			state.Preview = nil
+			upstream, server = generate()
+			if strings.Contains(server, "next.app.example.com") || strings.Contains(server, "app_preview_upstream") {
+				t.Fatalf("preview route outlived the preview: %s", server)
+			}
+			if !strings.Contains(upstream, "upstream app_preview_upstream {") || !strings.Contains(upstream, "server 127.0.0.1:1 down;") {
+				t.Fatalf("hand-written proxy rules need a loadable preview upstream: %s", upstream)
+			}
+		})
+	}
+}
+
+func TestNginxPreviewHostWithPathOnlyRouteKeepsLocation(t *testing.T) {
+	p, _ := nginxReloadFixture(t)
+	p.route = NginxRoute{Path: "/app/", PreviewHost: "next.example.com"}
+	state := &UpstreamState{
+		Service: "app", Servers: []Server{{Addr: "10.0.0.1:80"}},
+		Preview: []Server{{Addr: "10.0.0.2:80"}},
+	}
+	if err := p.GenerateConfig(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	location, _ := os.ReadFile(filepath.Join(p.routeDir, "app.location"))
+	server, _ := os.ReadFile(filepath.Join(p.routeDir, "app.server"))
+	if !strings.Contains(string(location), "location /app/ {") || strings.Contains(string(location), "preview") {
+		t.Fatalf("location file changed: %s", location)
+	}
+	if !strings.Contains(string(server), "server_name next.example.com;") ||
+		!strings.Contains(string(server), "location / {") ||
+		!strings.Contains(string(server), "proxy_pass http://app_preview_upstream/;") ||
+		strings.Contains(string(server), "/app/") {
+		t.Fatalf("server file should hold only the preview block: %s", server)
+	}
+}
+
+func TestNginxWithoutPreviewHostWritesTheSameFiles(t *testing.T) {
+	state := &UpstreamState{
+		Service: "app", Servers: []Server{{Addr: "10.0.0.1:80"}},
+		Preview: []Server{{Addr: "10.0.0.2:80"}},
+	}
+	for _, kind := range []string{"nginx", "angie"} {
+		p, _ := nginxReloadFixture(t)
+		p.proxyName = kind
+		if err := p.GenerateConfig(context.Background(), state); err != nil {
+			t.Fatal(err)
+		}
+		render := renderUpstream
+		if kind == "angie" {
+			render = renderAngieUpstream
+		}
+		want := map[string]string{
+			filepath.Join(p.configDir, "app.conf"):    render(state),
+			filepath.Join(p.routeDir, "app.server"):   renderNginxServer(state, p.route, kind),
+			filepath.Join(p.routeDir, "app.location"): "",
+		}
+		for path, content := range want {
+			if string(p.pending[path]) != content {
+				t.Fatalf("%s: %s changed without a preview host: %s", kind, path, p.pending[path])
+			}
+		}
+		if strings.Contains(string(p.pending[filepath.Join(p.configDir, "app.conf")]), "preview") {
+			t.Fatalf("%s: upstream file mentions a preview nobody asked for", kind)
+		}
+	}
+}
+
+func TestNginxPreviewHostCannotShadowAnotherServicesHost(t *testing.T) {
+	p, _ := nginxReloadFixture(t)
+	ctx := context.Background()
+	other := NewNginx(p.configDir, p.routeDir, NginxRoute{Host: "next.app.example.com"}, p.docker, "", "test")
+	if err := other.GenerateConfig(ctx, &UpstreamState{Service: "docs", Servers: []Server{{Addr: "10.0.0.9:80"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	p.route = previewRoute()
+	state := &UpstreamState{
+		Service: "app", Servers: []Server{{Addr: "10.0.0.1:80"}},
+		Preview: []Server{{Addr: "10.0.0.2:80"}},
+	}
+	if err := p.GenerateConfig(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	err := p.Reload(ctx)
+	if err == nil || !strings.Contains(err.Error(), "next.app.example.com") {
+		t.Fatalf("preview host taken by another service was accepted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(p.routeDir, "app.server")); !os.IsNotExist(err) {
+		t.Fatal("rejected preview left a route file")
+	}
+}
