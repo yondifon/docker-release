@@ -326,7 +326,7 @@ func (c *Client) ownConfig(ctx context.Context, info types.ContainerJSON) *conta
 	}
 	cfg.ExposedPorts = nat.PortSet{}
 	for port := range info.Config.ExposedPorts {
-		if _, ok := base.ExposedPorts[port]; !ok {
+		if _, ok := base.ExposedPorts[string(port)]; !ok {
 			cfg.ExposedPorts[port] = struct{}{}
 		}
 	}

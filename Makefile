@@ -18,8 +18,11 @@ bundle_tags = -t $(IMAGE):$(1) -t $(IMAGE):$(VERSION)-$(1) $(if $(MAJOR),-t $(IM
 # Bump type passed as a goal: make publish major|minor|fix
 BUMP := $(filter major minor fix,$(MAKECMDGOALS))
 
-.PHONY: dev dev-remove test lint build build-regular publish tag buildx-builder \
-	major minor fix print-version $(BUILD_TARGETS) $(UP_TARGETS) $(DOWN_TARGETS)
+# Images checked by `make scan`: the plain controller and the five bundles.
+SCAN_TARGETS := scan-regular $(addprefix scan-,$(PROXIES))
+
+.PHONY: dev dev-remove test lint build build-regular scan publish tag buildx-builder \
+	major minor fix print-version $(SCAN_TARGETS) $(BUILD_TARGETS) $(UP_TARGETS) $(DOWN_TARGETS)
 
 build: build-regular $(BUILD_TARGETS)
 
@@ -36,6 +39,23 @@ $(BUILD_TARGETS): build-%:
 		--build-arg VERSION=$(VERSION) \
 		$(call bundle_tags,$*) \
 		.
+
+# scan_image <name> <docker build args>: build the image locally, fail when it has
+# a critical or high CVE that already has a fix, then remove the local image.
+# Docker Scout scans the platform of this machine.
+define scan_image
+	docker build --pull $(2) -t $(IMAGE):scan-$(1) .
+	@docker scout cves --only-severity critical,high --only-fixed --exit-code local://$(IMAGE):scan-$(1); \
+	status=$$?; docker rmi $(IMAGE):scan-$(1) >/dev/null; exit $$status
+endef
+
+scan: $(SCAN_TARGETS)
+
+scan-regular:
+	$(call scan_image,regular,)
+
+$(filter-out scan-regular,$(SCAN_TARGETS)): scan-%:
+	$(call scan_image,$*,-f dockerfiles/$*.Dockerfile)
 
 tag:
 	@test "$(VERSION)" != "dev" || (echo "ERROR: set VERSION=x.y.z"; exit 1)
@@ -90,6 +110,7 @@ ifneq ($(BUMP),)
 	$(MAKE) publish VERSION=$$next
 else
 	@test "$(VERSION)" != "dev" || (echo "ERROR: set VERSION=x.y.z or use: make publish major|minor|fix"; exit 1)
+	$(MAKE) scan
 	$(MAKE) buildx-builder
 	@publish_image() { \
 		docker buildx build \

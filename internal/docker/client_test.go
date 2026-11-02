@@ -11,6 +11,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -18,7 +19,7 @@ type mockDockerAPI struct {
 	client.APIClient
 	inspectResult types.ContainerJSON
 	inspectByID   map[string]types.ContainerJSON
-	oldImage      *container.Config
+	oldImage      *dockerspec.DockerOCIImageConfig
 	listResult    []types.Container
 	startErr      error
 	removedIDs    []string
@@ -89,7 +90,7 @@ func TestFindContainerByImagePrefersBundledProxyOverUnrelatedImage(t *testing.T)
 func TestCreateContainerFromImageCleansUpOnStartFailure(t *testing.T) {
 	api := &mockDockerAPI{
 		inspectResult: types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{}, Config: &container.Config{}},
-		oldImage:      &container.Config{},
+		oldImage:      &dockerspec.DockerOCIImageConfig{},
 		startErr:      fmt.Errorf("start failed"),
 	}
 	ref := types.Container{ID: "ref-id", NetworkSettings: &types.SummaryNetworkSettings{}}
@@ -113,12 +114,12 @@ func TestFirstExposedPortDeterministic(t *testing.T) {
 func TestCreateContainerFromImageKeepsOnlyTheContainersOwnSettings(t *testing.T) {
 	const id = "0123456789abcdef0123"
 	api := &mockDockerAPI{
-		oldImage: &container.Config{
+		oldImage: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{
 			Env:        []string{"APP_VERSION=1", "SHARED=image"},
 			Cmd:        []string{"serve", "v1"},
 			Labels:     map[string]string{"app.version": "1"},
 			WorkingDir: "/app",
-		},
+		}},
 		inspectResult: types.ContainerJSON{
 			ContainerJSONBase: &types.ContainerJSONBase{
 				ID: id, Name: "/shop-app-1", Image: "sha256:old",
@@ -170,7 +171,7 @@ func TestCreateContainerFromImageKeepsOnlyTheContainersOwnSettings(t *testing.T)
 
 func TestCreateContainerFromImageKeepsCmdWhenEntrypointIsOverridden(t *testing.T) {
 	api := &mockDockerAPI{
-		oldImage: &container.Config{Entrypoint: []string{"/image-entry"}, Cmd: []string{"serve"}},
+		oldImage: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Entrypoint: []string{"/image-entry"}, Cmd: []string{"serve"}}},
 		inspectResult: types.ContainerJSON{
 			ContainerJSONBase: &types.ContainerJSONBase{ID: "0123456789abcdef", Image: "sha256:old"},
 			Config:            &container.Config{Entrypoint: []string{"/my-entry"}, Cmd: []string{"serve"}},
