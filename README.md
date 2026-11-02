@@ -20,7 +20,6 @@ services:
     image: malico/docker-release:nginx
     ports:
       - "80:80"
-    stop_grace_period: 90s
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
