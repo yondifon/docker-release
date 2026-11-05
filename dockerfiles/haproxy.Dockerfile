@@ -1,4 +1,7 @@
-ARG COMPOSE_VERSION=v5.6.1
+# Built from source for a newer golang.org/x/net than docker/compose-bin has. Once a release
+# ships x/net v0.62.0 or newer, make `compose` `FROM docker/compose-bin:${COMPOSE_VERSION}` again.
+ARG COMPOSE_VERSION=v5.7.0
+ARG XNET_VERSION=v0.62.0
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 ARG VERSION=dev
 ARG TARGETOS
@@ -9,7 +12,15 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags bundled_haproxy -ldflags="-s -w -X main.version=${VERSION}" -o /bin/dr ./cmd/docker-release/
 
-FROM docker/compose-bin:${COMPOSE_VERSION} AS compose
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS compose
+ARG COMPOSE_VERSION
+ARG XNET_VERSION
+ARG TARGETOS
+ARG TARGETARCH
+ADD https://github.com/docker/compose.git#${COMPOSE_VERSION} /src
+WORKDIR /src
+RUN go get golang.org/x/net@${XNET_VERSION} && go mod tidy
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-w -X github.com/docker/compose/v5/internal.Version=${COMPOSE_VERSION}" -o /docker-compose ./cmd
 
 FROM haproxy:3.2-alpine AS runtime
 USER root
