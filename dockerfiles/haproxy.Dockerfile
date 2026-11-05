@@ -1,7 +1,5 @@
-# Compose is built from source so it can use a newer golang.org/x/net than
-# docker/compose-bin ships. When a Compose release includes x/net v0.62.0 or newer,
-# replace the whole `compose` stage with `FROM docker/compose-bin:${COMPOSE_VERSION} AS compose`
-# and drop XNET_VERSION.
+# Built from source for a newer golang.org/x/net than docker/compose-bin has. Once a release
+# ships x/net v0.62.0 or newer, make `compose` `FROM docker/compose-bin:${COMPOSE_VERSION}` again.
 ARG COMPOSE_VERSION=v5.7.0
 ARG XNET_VERSION=v0.62.0
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
