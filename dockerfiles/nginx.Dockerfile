@@ -1,4 +1,9 @@
-ARG COMPOSE_VERSION=v5.6.1
+# Compose is built from source so it can use a newer golang.org/x/net than
+# docker/compose-bin ships. When a Compose release includes x/net v0.62.0 or newer,
+# replace the whole `compose` stage with `FROM docker/compose-bin:${COMPOSE_VERSION} AS compose`
+# and drop XNET_VERSION.
+ARG COMPOSE_VERSION=v5.7.0
+ARG XNET_VERSION=v0.62.0
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 ARG VERSION=dev
 ARG TARGETOS
@@ -9,7 +14,15 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags bundled_nginx -ldflags="-s -w -X main.version=${VERSION}" -o /bin/dr ./cmd/docker-release/
 
-FROM docker/compose-bin:${COMPOSE_VERSION} AS compose
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS compose
+ARG COMPOSE_VERSION
+ARG XNET_VERSION
+ARG TARGETOS
+ARG TARGETARCH
+ADD https://github.com/docker/compose.git#${COMPOSE_VERSION} /src
+WORKDIR /src
+RUN go get golang.org/x/net@${XNET_VERSION} && go mod tidy
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-w -X github.com/docker/compose/v5/internal.Version=${COMPOSE_VERSION}" -o /docker-compose ./cmd
 
 FROM alpine:3.23 AS runtime
 
